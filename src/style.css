@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
 * {
   margin: 0;
   padding: 0;
@@ -8,8 +10,272 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #111;
+  background: #1a1a2e;
+  font-family: 'Press Start 2P', monospace;
+  color: #e0e0e0;
 }
+
+/* ===== ASSET LOADER SCREEN ===== */
+
+.loader-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  gap: 1.2rem;
+}
+
+.loader-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(1.2rem, 3vw, 2.4rem);
+  color: #e94560;
+  text-shadow:
+    0 0 8px #e94560,
+    0 0 20px #e9456088;
+  text-align: center;
+  letter-spacing: 0.1em;
+}
+
+.loader-subtitle {
+  font-size: clamp(0.55rem, 1.2vw, 0.75rem);
+  color: #7a7a9e;
+  text-align: center;
+}
+
+/* -- Cached banner -- */
+
+.cached-banner {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 1rem 1.5rem;
+  max-width: 560px;
+  width: 100%;
+  text-align: center;
+}
+
+.cached-info {
+  font-size: 0.55rem;
+  line-height: 1.8;
+  color: #a0a0c0;
+  margin-bottom: 0.75rem;
+}
+
+.cached-btn-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.cached-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.6rem;
+  padding: 0.6rem 1.2rem;
+  background: #0f3460;
+  color: #53d8fb;
+  border: 2px solid #53d8fb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.cached-btn:hover {
+  background: #1a4a7a;
+  box-shadow: 0 0 12px #53d8fb66;
+}
+
+.clear-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.55rem;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  color: #e94560;
+  border: 1px solid #e9456066;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.clear-btn:hover {
+  background: #e9456022;
+}
+
+/* -- Upload section -- */
+
+.upload-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 520px;
+  width: 100%;
+}
+
+.dropzone {
+  width: 100%;
+  border: 2px dashed #0f3460;
+  border-radius: 8px;
+  padding: 2.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: #16213e44;
+}
+
+.dropzone:hover,
+.dropzone.drag-over {
+  border-color: #53d8fb;
+  background: #16213eaa;
+}
+
+.dropzone-icon {
+  font-size: 2rem;
+}
+
+.dropzone-label {
+  font-size: 0.6rem;
+  color: #c0c0e0;
+  text-align: center;
+}
+
+.dropzone-hint {
+  font-size: 0.5rem;
+  color: #6a6a8e;
+}
+
+.separator {
+  font-size: 0.55rem;
+  color: #4a4a6e;
+  letter-spacing: 0.2em;
+}
+
+.url-row {
+  width: 100%;
+}
+
+.url-input {
+  width: 100%;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.url-input:focus {
+  border-color: #53d8fb;
+}
+
+.url-input::placeholder {
+  color: #4a4a6e;
+}
+
+.load-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.7rem;
+  padding: 0.8rem 2rem;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.load-btn:hover:not(:disabled) {
+  background: #ff5a78;
+  box-shadow: 0 0 16px #e9456066;
+}
+
+.load-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* -- Progress -- */
+
+.progress-area {
+  max-width: 520px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 18px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #e94560, #53d8fb);
+  transition: width 0.15s ease-out;
+}
+
+.status-msg {
+  font-size: 0.5rem;
+  color: #7a7a9e;
+  text-align: center;
+  min-height: 1.2rem;
+  word-break: break-all;
+}
+
+/* -- Error -- */
+
+.error-msg {
+  font-size: 0.55rem;
+  color: #e94560;
+  background: #e9456015;
+  border: 1px solid #e9456044;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+}
+
+/* -- Utility -- */
+
+.hidden {
+  display: none !important;
+}
+
+/* ===== POST-LOAD PLACEHOLDER ===== */
+
+.loading-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 1.5rem;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ===== CANVAS (kept for future game use) ===== */
 
 canvas {
   display: block;

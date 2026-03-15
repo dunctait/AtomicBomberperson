@@ -13,7 +13,11 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/jszip": "^3.4.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.0"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
   }
 }

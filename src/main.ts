@@ -1,65 +1,34 @@
 import './style.css';
+import { showAssetLoaderScreen } from './ui/asset-loader-screen';
 
-const GRID_COLS = 15;
-const GRID_ROWS = 11;
+async function main() {
+  const app = document.createElement('div');
+  app.id = 'app';
+  document.body.appendChild(app);
 
-const canvas = document.createElement('canvas');
-document.body.appendChild(canvas);
-const ctx = canvas.getContext('2d')!;
+  const result = await showAssetLoaderScreen(app);
 
-function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  draw();
-}
+  // Transition to placeholder "game loading" screen
+  app.innerHTML = '';
+  const msg = document.createElement('div');
+  msg.className = 'loading-placeholder';
 
-function draw() {
-  const w = canvas.width;
-  const h = canvas.height;
-
-  // Background
-  ctx.fillStyle = '#1a1a2e';
-  ctx.fillRect(0, 0, w, h);
-
-  // Calculate grid dimensions to fit centered on screen
-  const cellSize = Math.min(
-    Math.floor(w / GRID_COLS),
-    Math.floor(h / GRID_ROWS)
-  );
-  const gridW = cellSize * GRID_COLS;
-  const gridH = cellSize * GRID_ROWS;
-  const offsetX = Math.floor((w - gridW) / 2);
-  const offsetY = Math.floor((h - gridH) / 2);
-
-  // Draw grid cells
-  for (let row = 0; row < GRID_ROWS; row++) {
-    for (let col = 0; col < GRID_COLS; col++) {
-      const x = offsetX + col * cellSize;
-      const y = offsetY + row * cellSize;
-
-      // Checkerboard pattern
-      ctx.fillStyle = (row + col) % 2 === 0 ? '#16213e' : '#0f3460';
-      ctx.fillRect(x, y, cellSize, cellSize);
-
-      // Cell border
-      ctx.strokeStyle = '#e94560';
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(x, y, cellSize, cellSize);
-    }
+  if (result === 'cached') {
+    msg.innerHTML =
+      '<h1 class="loader-title">ATOMIC BOMBERPERSON</h1>' +
+      '<p class="loader-subtitle">Assets loaded from cache. Game loading...</p>';
+  } else {
+    msg.innerHTML =
+      '<h1 class="loader-title">ATOMIC BOMBERPERSON</h1>' +
+      `<p class="loader-subtitle">${result.fileCount} files extracted (${formatBytes(result.totalSize)}). Game loading...</p>`;
   }
-
-  // Draw title text
-  ctx.fillStyle = '#e94560';
-  ctx.font = `bold ${Math.max(24, cellSize)}px monospace`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Atomic Bomberperson', w / 2, h / 2);
-
-  // Subtitle
-  ctx.fillStyle = '#aaa';
-  ctx.font = `${Math.max(14, cellSize * 0.4)}px monospace`;
-  ctx.fillText('scaffold ready', w / 2, h / 2 + cellSize);
+  app.appendChild(msg);
 }
 
-window.addEventListener('resize', resize);
-resize();
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+main();
