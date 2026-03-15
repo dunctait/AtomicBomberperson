@@ -764,7 +764,13 @@ export function createGameplayScreen(
       // Update bombs and explosions -- capture events
       const events = bombManager.update(dt, gameGrid);
 
-      // Reveal powerups under destroyed bricks
+      // Update brick crumble animations
+      gridRenderer.update(dt);
+
+      // Animate and reveal powerups under destroyed bricks
+      if (events.bricksDestroyed.length > 0) {
+        gridRenderer.onBricksDestroyed(events.bricksDestroyed);
+      }
       for (const brick of events.bricksDestroyed) {
         powerupManager.revealAt(brick.col, brick.row);
       }

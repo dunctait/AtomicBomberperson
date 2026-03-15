@@ -6,6 +6,15 @@ const TILE_FRAME_EMPTY = 0;
 const TILE_FRAME_BRICK = 1;
 const TILE_FRAME_SOLID = 2;
 
+const BRICK_CRUMBLE_DURATION = 0.5; // seconds for the brick destruction animation
+const BRICK_CRUMBLE_FRAMES = 9;     // XBRICK0.ANI has 9 frames
+
+interface CrumblingBrick {
+  col: number;
+  row: number;
+  timer: number; // counts up from 0 to BRICK_CRUMBLE_DURATION
+}
+
 export class GridRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -15,7 +24,9 @@ export class GridRenderer {
   readonly tileHeight = 36;
 
   private tileSprites: HTMLCanvasElement[] | null = null;
+  private crumbleSprites: HTMLCanvasElement[] | null = null;
   private tileLoadStarted = false;
+  private crumblingBricks: CrumblingBrick[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -36,9 +47,30 @@ export class GridRenderer {
       if (anim.frames.length >= 3) {
         this.tileSprites = anim.frames;
       }
-    }).catch(() => {
-      // Tile assets not available — fall back to colored rectangles
-    });
+    }).catch(() => {});
+
+    void assets.getAnimation('XBRICK0.ANI').then((anim) => {
+      if (anim.frames.length >= BRICK_CRUMBLE_FRAMES) {
+        this.crumbleSprites = anim.frames;
+      }
+    }).catch(() => {});
+  }
+
+  /** Notify that bricks were destroyed — starts crumble animations */
+  onBricksDestroyed(positions: { col: number; row: number }[]): void {
+    for (const pos of positions) {
+      this.crumblingBricks.push({ col: pos.col, row: pos.row, timer: 0 });
+    }
+  }
+
+  /** Update crumble animations */
+  update(dt: number): void {
+    for (const brick of this.crumblingBricks) {
+      brick.timer += dt;
+    }
+    this.crumblingBricks = this.crumblingBricks.filter(
+      (b) => b.timer < BRICK_CRUMBLE_DURATION,
+    );
   }
 
   /** Render the full grid using imported tile sprites when available */
@@ -60,6 +92,32 @@ export class GridRenderer {
           this.renderFallbackTile(ctx, x, y, tw, th, type);
         }
       }
+    }
+
+    // Render crumbling brick animations on top
+    this.renderCrumblingBricks(ctx, tw, th);
+  }
+
+  private renderCrumblingBricks(
+    ctx: CanvasRenderingContext2D,
+    tw: number,
+    th: number,
+  ): void {
+    if (!this.crumbleSprites) return;
+
+    for (const brick of this.crumblingBricks) {
+      const progress = brick.timer / BRICK_CRUMBLE_DURATION;
+      const frameIndex = Math.min(
+        BRICK_CRUMBLE_FRAMES - 1,
+        Math.floor(progress * BRICK_CRUMBLE_FRAMES),
+      );
+      const frame = this.crumbleSprites[frameIndex];
+      const x = brick.col * tw;
+      const y = brick.row * th;
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(frame, x, y, tw, th);
+      ctx.restore();
     }
   }
 
@@ -88,7 +146,6 @@ export class GridRenderer {
     tw: number, th: number,
     type: CellContent,
   ): void {
-    // Fill cell background
     switch (type) {
       case CellContent.Solid:
         ctx.fillStyle = '#444';
@@ -102,12 +159,10 @@ export class GridRenderer {
     }
     ctx.fillRect(x, y, tw, th);
 
-    // Grid lines
     ctx.strokeStyle = '#0f2f0f';
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
 
-    // Brick pattern
     if (type === CellContent.Brick) {
       ctx.strokeStyle = '#6B3410';
       ctx.lineWidth = 1;
@@ -127,7 +182,6 @@ export class GridRenderer {
       ctx.stroke();
     }
 
-    // Solid wall shading
     if (type === CellContent.Solid) {
       ctx.fillStyle = '#555';
       ctx.fillRect(x + 1, y + 1, tw - 2, 3);
@@ -138,7 +192,6 @@ export class GridRenderer {
     }
   }
 
-  /** Convert pixel position to grid coordinates */
   pixelToGrid(px: number, py: number): { col: number; row: number } {
     return {
       col: Math.floor(px / this.tileWidth),
@@ -146,7 +199,6 @@ export class GridRenderer {
     };
   }
 
-  /** Convert grid coordinates to pixel position (top-left of cell) */
   gridToPixel(col: number, row: number): { x: number; y: number } {
     return {
       x: col * this.tileWidth,
@@ -154,7 +206,6 @@ export class GridRenderer {
     };
   }
 
-  /** Resize canvas to fit the grid */
   resize(): void {
     this.canvas.width = GRID_COLS * this.tileWidth;   // 600
     this.canvas.height = GRID_ROWS * this.tileHeight;  // 396
