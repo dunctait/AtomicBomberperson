@@ -1,0 +1,7 @@
+node_modules/
+dist/
+references/
+.claude/
+CLAUDE.md
+*.log
+.DS_Store
