@@ -113,7 +113,7 @@ export class AIBot {
             this.isCellSafe(pos.col, pos.row, grid, bombs) &&
             this.simPlaceBombIsSafe(pos.col, pos.row, grid, bombs)) {
           this.player.inputBomb = true;
-          this.bombCooldown = 1.5;
+          this.bombCooldown = this.player.stats.canKick ? 0.8 : 1.5;
           // Re-think quickly to flee
           this.thinkTimer = 0.05;
           return;
@@ -266,6 +266,7 @@ export class AIBot {
 
   private findSafePosition(grid: GameGrid, bombs: BombManager): GridPos | null {
     const pos = this.player.getGridPos();
+    const canKick = this.player.stats.canKick;
     const visited = new Set<string>();
     const queue: GridPos[] = [{ col: pos.col, row: pos.row }];
     visited.add(`${pos.col},${pos.row}`);
@@ -283,8 +284,10 @@ export class AIBot {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
+        // With kick, the AI can pass through bomb cells (it will kick them away)
+        const passable = grid.isWalkable(nc, nr) && (canKick || !bombs.hasBomb(nc, nr));
         if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
-            grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
+            passable) {
           visited.add(key);
           queue.push({ col: nc, row: nr });
         }
@@ -426,11 +429,13 @@ export class AIBot {
     const pos = this.player.getGridPos();
     const candidates: GridPos[] = [];
 
+    const canKick = this.player.stats.canKick;
     for (const dir of DIRS) {
       const nc = pos.col + dir.dx;
       const nr = pos.row + dir.dy;
       if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
-          grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr) &&
+          grid.isWalkable(nc, nr) &&
+          (canKick || !bombs.hasBomb(nc, nr)) &&
           this.isCellSafe(nc, nr, grid, bombs)) {
         candidates.push({ col: nc, row: nr });
       }
@@ -456,6 +461,7 @@ export class AIBot {
     endCol: number, endRow: number,
     grid: GameGrid, bombs: BombManager,
     extraFilter: (nc: number, nr: number) => boolean,
+    allowBombs = false,
   ): GridPos[] {
     if (startCol === endCol && startRow === endRow) return [];
 
@@ -488,7 +494,7 @@ export class AIBot {
         if (visited.has(key)) continue;
         if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
         if (!grid.isWalkable(nc, nr)) continue;
-        if (bombs.hasBomb(nc, nr)) continue;
+        if (!allowBombs && bombs.hasBomb(nc, nr)) continue;
         if (!extraFilter(nc, nr)) continue;
         visited.add(key);
         parent.set(key, currentKey);
@@ -522,10 +528,13 @@ export class AIBot {
     endCol: number, endRow: number,
     grid: GameGrid, bombs: BombManager,
   ): GridPos[] {
-    // Never walk into an active explosion
+    // Never walk into an active explosion.
+    // If the AI has kick, bombs in the path are not blockers (walking into them kicks them away).
+    const canKick = this.player.stats.canKick;
     return this.bfsPath(
       startCol, startRow, endCol, endRow, grid, bombs,
       (nc, nr) => !bombs.isExploding(nc, nr),
+      canKick, // allowBombs: kick sends bombs away, so they're passable
     );
   }
 

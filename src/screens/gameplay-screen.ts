@@ -12,8 +12,8 @@ import { PowerupManager, applyPowerup } from '../engine/powerup';
 import { PowerupRenderer } from '../render/powerup-renderer';
 import { AIBot } from '../engine/ai-bot';
 import { parseScheme, TileType, type ParsedScheme } from '../assets/parsers/sch-parser';
-import { getAllFileNames } from '../assets/asset-db';
-import { getFile } from '../assets/asset-db';
+import { getAllFileNames, getFile } from '../assets/asset-db';
+import { soundManager } from '../engine/sound-manager';
 
 interface GameplayMapMeta {
   name: string;
@@ -494,6 +494,7 @@ export function createGameplayScreen(
 
       if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange)) {
         p.stats.activeBombs++;
+        soundManager.play('BOMBDROP.WAV');
       }
 
       // Clear the bomb input so it only fires once per press
@@ -519,6 +520,7 @@ export function createGameplayScreen(
       const { col, row } = p.getGridPos();
       if (bombManager.isExploding(col, row)) {
         p.die();
+        soundManager.play('DIE.WAV');
       }
     }
   }
@@ -530,6 +532,7 @@ export function createGameplayScreen(
       const collected = powerupManager.collectAt(col, row);
       if (collected) {
         applyPowerup(collected.type, p.stats);
+        soundManager.play('POWERUP.WAV');
       }
     }
   }
@@ -770,6 +773,11 @@ export function createGameplayScreen(
 
       // Update bombs and explosions -- capture events
       const events = bombManager.update(dt, gameGrid);
+
+      // Play explosion sound when new explosions fire this frame
+      if (events.explosionPositions.length > 0) {
+        soundManager.play('EXPLO.WAV');
+      }
 
       // Update brick crumble animations
       gridRenderer.update(dt);

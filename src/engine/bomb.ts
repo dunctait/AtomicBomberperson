@@ -34,6 +34,13 @@ export interface BombEvents {
 const BOMB_FUSE = 2.0;
 const EXPLOSION_DURATION = 0.5;
 
+function dirToDeltas(dir: 'up' | 'down' | 'left' | 'right'): { ddx: number; ddy: number } {
+  return {
+    ddx: dir === 'left' ? -1 : dir === 'right' ? 1 : 0,
+    ddy: dir === 'up'   ? -1 : dir === 'down'  ? 1 : 0,
+  };
+}
+
 const DIRECTIONS: { dx: number; dy: number; name: Explosion['direction'] }[] = [
   { dx: 0, dy: -1, name: 'up' },
   { dx: 0, dy: 1, name: 'down' },
@@ -122,8 +129,7 @@ export class BombManager {
     const bomb = this.bombs.find((b) => !b.exploded && b.col === col && b.row === row);
     if (!bomb) return false;
 
-    const ddx = direction === 'left' ? -1 : direction === 'right' ? 1 : 0;
-    const ddy = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+    const { ddx, ddy } = dirToDeltas(direction);
     const nextCol = col + ddx;
     const nextRow = row + ddy;
 
@@ -141,42 +147,36 @@ export class BombManager {
   private isCellClearForSlide(col: number, row: number, grid: GameGrid): boolean {
     if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) return false;
     const cell = grid.getCell(col, row);
-    if (!cell) return false;
-    if (cell.type !== CellContent.Empty) return false;
-    if (this.hasBomb(col, row)) return false;
-    return true;
+    return !!cell && cell.type === CellContent.Empty && !this.hasBomb(col, row);
+  }
+
+  private stopSliding(bomb: Bomb): void {
+    bomb.sliding = false;
+    bomb.slideDirection = null;
+    bomb.slideX = 0;
+    bomb.slideY = 0;
   }
 
   /** Advance a sliding bomb by dt seconds, stopping when it hits an obstacle. */
   private updateSlidingBomb(bomb: Bomb, dt: number, grid: GameGrid): void {
     if (!bomb.slideDirection) return;
 
-    const ddx = bomb.slideDirection === 'left' ? -1 : bomb.slideDirection === 'right' ? 1 : 0;
-    const ddy = bomb.slideDirection === 'up' ? -1 : bomb.slideDirection === 'down' ? 1 : 0;
-
+    const { ddx, ddy } = dirToDeltas(bomb.slideDirection);
     const step = bomb.slideSpeed * dt;
     bomb.slideX += ddx * step;
     bomb.slideY += ddy * step;
 
     // Check if we've crossed a whole-cell boundary
-    while (Math.abs(ddx !== 0 ? bomb.slideX : bomb.slideY) >= 1) {
-      const nextCol = bomb.col + ddx;
-      const nextRow = bomb.row + ddy;
-
+    while (Math.abs(bomb.slideX) + Math.abs(bomb.slideY) >= 1) {
       // Move to the next cell center
-      bomb.col = nextCol;
-      bomb.row = nextRow;
+      bomb.col += ddx;
+      bomb.row += ddy;
       bomb.slideX -= ddx;
       bomb.slideY -= ddy;
 
       // Check if the cell after that is clear; if not, stop here
-      const afterCol = bomb.col + ddx;
-      const afterRow = bomb.row + ddy;
-      if (!this.isCellClearForSlide(afterCol, afterRow, grid)) {
-        bomb.sliding = false;
-        bomb.slideDirection = null;
-        bomb.slideX = 0;
-        bomb.slideY = 0;
+      if (!this.isCellClearForSlide(bomb.col + ddx, bomb.row + ddy, grid)) {
+        this.stopSliding(bomb);
         return;
       }
     }
