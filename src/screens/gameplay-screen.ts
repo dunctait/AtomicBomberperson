@@ -569,6 +569,11 @@ export function createGameplayScreen(
         html += `<span class="hud-stat" title="Bombs">B:${p.stats.maxBombs}</span>`;
         html += `<span class="hud-stat" title="Flame range">F:${p.stats.bombRange}</span>`;
         html += `<span class="hud-stat" title="Speed">S:${p.stats.speed.toFixed(1)}</span>`;
+        if (p.stats.canKick)    html += `<span class="hud-powerup" title="Kick">K</span>`;
+        if (p.stats.canPunch)   html += `<span class="hud-powerup" title="Punch">P</span>`;
+        if (p.stats.canGrab)    html += `<span class="hud-powerup" title="Grab">G</span>`;
+        if (p.stats.hasTrigger) html += `<span class="hud-powerup" title="Trigger">T</span>`;
+        if (p.stats.hasJelly)   html += `<span class="hud-powerup" title="Jelly">J</span>`;
       }
       html += `</div>`;
     }
@@ -760,7 +765,7 @@ export function createGameplayScreen(
 
       // Update all players (smooth movement)
       for (const p of players) {
-        p.update(dt, gameGrid);
+        p.update(dt, gameGrid, bombManager);
       }
 
       // Update bombs and explosions -- capture events

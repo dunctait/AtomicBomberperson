@@ -71,12 +71,9 @@ export class GameGrid {
           const c = spawn.x + dc;
           if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS) {
             const cell = this.cells[r][c];
-            // Clear both bricks and solid walls — the player hitbox extends
-            // into adjacent cells, so all 8 neighbors must be walkable.
-            if (cell.type === CellContent.Brick || cell.type === CellContent.Solid) {
-              if (cell.type === CellContent.Brick) {
-                this.spawnClearedBrickCount += 1;
-              }
+            // Only clear bricks, never solid walls (pillars are permanent)
+            if (cell.type === CellContent.Brick) {
+              this.spawnClearedBrickCount += 1;
               cell.type = CellContent.Empty;
             }
           }
@@ -108,9 +105,4 @@ export class GameGrid {
     return cell.type === CellContent.Empty;
   }
 
-  /** Check if a cell has an active explosion (delegated to BombManager at runtime) */
-  isDangerous(col: number, row: number): boolean {
-    // This is a convenience stub — gameplay-screen checks BombManager directly
-    return false;
-  }
 }

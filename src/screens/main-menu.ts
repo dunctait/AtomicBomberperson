@@ -7,7 +7,7 @@ interface MenuItemDefinition {
   onSelect?: () => void;
 }
 
-const BAKED_MENU_ROW_TOPS = [132, 162, 192, 222, 252, 282, 312] as const;
+const BAKED_MENU_ROW_TOPS = [110, 147, 184, 221, 258, 295, 332] as const;
 
 export function createMainMenu(
   onTransition: (state: string) => void,
@@ -34,6 +34,7 @@ export function createMainMenu(
     },
     {
       label: 'EXIT BOMBERMAN',
+      onSelect: () => {},
     },
   ];
   let selectedIndex = 0;
@@ -112,6 +113,16 @@ export function createMainMenu(
           li.appendChild(lock);
         }
 
+        li.addEventListener('click', () => {
+          selectedIndex = i;
+          updateSelection();
+          if (item.onSelect) {
+            item.onSelect();
+          } else if (stageElements) {
+            showToast(stageElements.stage, `${item.label} locked`);
+          }
+        });
+
         itemEls.push(li);
         list.appendChild(li);
       });
@@ -135,19 +146,20 @@ export function createMainMenu(
     },
 
     onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'ArrowUp') {
-        selectedIndex =
-          (selectedIndex - 1 + menuItems.length) % menuItems.length;
-        updateSelection();
-      } else if (e.key === 'ArrowDown') {
-        selectedIndex = (selectedIndex + 1) % menuItems.length;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        for (let step = 1; step < menuItems.length; step++) {
+          const next = (selectedIndex + dir * step + menuItems.length) % menuItems.length;
+          if (menuItems[next].onSelect) {
+            selectedIndex = next;
+            break;
+          }
+        }
         updateSelection();
       } else if (e.key === 'Enter') {
         const chosen = menuItems[selectedIndex];
         if (chosen.onSelect) {
           chosen.onSelect();
-        } else if (stageElements) {
-          showToast(stageElements.stage, `${chosen.label} locked`);
         }
       }
     },

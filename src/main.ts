@@ -1,5 +1,6 @@
 import './style.css';
 import { showAssetLoaderScreen } from './ui/asset-loader-screen';
+import { hasAssets } from './assets/asset-db';
 import { StateMachine } from './engine/state-machine';
 import { createTitleScreen } from './screens/title-screen';
 import { createMainMenu } from './screens/main-menu';
@@ -12,7 +13,10 @@ async function main() {
   app.id = 'app';
   document.body.appendChild(app);
 
-  await showAssetLoaderScreen(app);
+  const cached = await hasAssets();
+  if (!cached) {
+    await showAssetLoaderScreen(app);
+  }
 
   // Assets are ready -- set up the state machine
   app.innerHTML = '';

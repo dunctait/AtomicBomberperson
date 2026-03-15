@@ -1,4 +1,5 @@
-import { GameGrid } from './game-grid';
+import { GameGrid, GRID_COLS, GRID_ROWS } from './game-grid';
+import { BombManager } from './bomb';
 
 export type PlayerType = 'human' | 'ai' | 'off';
 export type Direction = 'up' | 'down' | 'left' | 'right' | 'none';
@@ -113,7 +114,7 @@ export class Player {
     return this.directionStack[this.directionStack.length - 1];
   }
 
-  update(dt: number, grid: GameGrid): void {
+  update(dt: number, grid: GameGrid, bombs: BombManager): void {
     if (!this.alive) return;
 
     const dir = this.getDesiredDirection();
@@ -141,13 +142,17 @@ export class Player {
     const newX = this.x + dx;
     const newY = this.y + dy;
 
-    if (this.canMoveTo(newX, newY, grid)) {
+    if (this.canMoveTo(newX, newY, grid, bombs)) {
       this.x = newX;
       this.y = newY;
     } else {
       // Cannot move directly -- try corner sliding
-      this.applyCornerSlide(dt, grid);
+      this.applyCornerSlide(dt, grid, bombs);
     }
+
+    // Clamp position so player stays within the grid
+    this.x = Math.max(0, Math.min(GRID_COLS - 1, this.x));
+    this.y = Math.max(0, Math.min(GRID_ROWS - 1, this.y));
   }
 
   getGridPos(): { col: number; row: number } {
@@ -157,23 +162,33 @@ export class Player {
     };
   }
 
-  /** Check if the player hitbox at (px, py) overlaps any non-walkable cell. */
-  private canMoveTo(px: number, py: number, grid: GameGrid): boolean {
-    // Compute the cells the hitbox overlaps
+  /** Check if the player hitbox at (px, py) overlaps any non-walkable cell or blocking bomb. */
+  private canMoveTo(px: number, py: number, grid: GameGrid, bombs: BombManager): boolean {
+    // Compute the cells the hitbox overlaps.
+    // Player coordinates use a center-of-tile convention: position N means the
+    // center of tile N, so tile N spans [N-0.5, N+0.5).  We convert hitbox
+    // edges to tile indices by adding 0.5 before flooring.
     const left   = px - HALF;
     const right  = px + HALF;
     const top    = py - HALF;
     const bottom = py + HALF;
 
-    // All four corner cells (and anything in between for larger hitboxes)
-    const minCol = Math.floor(left);
-    const maxCol = Math.floor(right - 0.001); // slight inset to avoid touching next tile edge
-    const minRow = Math.floor(top);
-    const maxRow = Math.floor(bottom - 0.001);
+    const minCol = Math.floor(left + 0.5);
+    const maxCol = Math.floor(right + 0.5 - 0.001);
+    const minRow = Math.floor(top + 0.5);
+    const maxRow = Math.floor(bottom + 0.5 - 0.001);
 
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
+        // Out-of-bounds cells are treated as passable — edge maps (e.g. BASIC)
+        // have no border walls and spawns sit at grid corners.
+        if (c < 0 || r < 0 || c >= grid.cells[0]?.length || r >= grid.cells.length) {
+          continue;
+        }
         if (!grid.isWalkable(c, r)) {
+          return false;
+        }
+        if (bombs.isBombBlocking(c, r, this.index)) {
           return false;
         }
       }
@@ -185,7 +200,7 @@ export class Player {
    * Corner sliding: when the player is blocked, check if nudging perpendicular
    * would let them slip around a corner. This is the classic Bomberman feel.
    */
-  private applyCornerSlide(dt: number, grid: GameGrid): void {
+  private applyCornerSlide(dt: number, grid: GameGrid, bombs: BombManager): void {
     const dir = this.moveDirection;
     const speed = this.stats.speed * dt;
 
@@ -197,7 +212,7 @@ export class Player {
 
       if (Math.abs(offset) < SLIDE_THRESHOLD && Math.abs(offset) > 0.01) {
         // Check if aligning to nearestCol would allow the vertical move
-        if (this.canMoveTo(nearestCol, this.y + dy, grid)) {
+        if (this.canMoveTo(nearestCol, this.y + dy, grid, bombs)) {
           // Nudge horizontally toward alignment
           const nudge = Math.min(speed, Math.abs(offset));
           this.x += offset > 0 ? -nudge : nudge;
@@ -211,7 +226,7 @@ export class Player {
       const offset = this.y - nearestRow;
 
       if (Math.abs(offset) < SLIDE_THRESHOLD && Math.abs(offset) > 0.01) {
-        if (this.canMoveTo(this.x + dx, nearestRow, grid)) {
+        if (this.canMoveTo(this.x + dx, nearestRow, grid, bombs)) {
           const nudge = Math.min(speed, Math.abs(offset));
           this.y += offset > 0 ? -nudge : nudge;
           return;

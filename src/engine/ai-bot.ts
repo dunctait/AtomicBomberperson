@@ -3,6 +3,19 @@ import { GameGrid, CellContent, GRID_COLS, GRID_ROWS } from './game-grid';
 import { BombManager } from './bomb';
 import { PowerupManager } from './powerup';
 
+/**
+ * AI Bot modelled after fpc_atomic's approach:
+ *   1. ESCAPE — if in a bomb's blast zone, flee to nearest safe cell
+ *   2. SEEK POWERUP — collect nearby revealed powerups
+ *   3. ATTACK — find best brick-destroying position, simulate bomb, verify escape
+ *   4. WANDER — random safe movement
+ *
+ * Key safety rule (from fpc_atomic SimPlaceBomb):
+ *   Before placing a bomb, build the full danger map *including* the
+ *   hypothetical new bomb, then BFS-verify that at least one reachable
+ *   cell is survivable.  This prevents self-kills.
+ */
+
 type AIGoal = 'flee' | 'seek-powerup' | 'attack' | 'wander';
 
 interface GridPos {
@@ -10,12 +23,11 @@ interface GridPos {
   row: number;
 }
 
-/** Directions for BFS neighbor expansion. */
 const DIRS: { dx: number; dy: number }[] = [
-  { dx: 0, dy: -1 }, // up
-  { dx: 0, dy: 1 },  // down
-  { dx: -1, dy: 0 }, // left
-  { dx: 1, dy: 0 },  // right
+  { dx: 0, dy: -1 },
+  { dx: 0, dy: 1 },
+  { dx: -1, dy: 0 },
+  { dx: 1, dy: 0 },
 ];
 
 export class AIBot {
@@ -28,14 +40,13 @@ export class AIBot {
 
   constructor(player: Player) {
     this.player = player;
-    this.thinkTimer = Math.random() * 0.3; // stagger initial think
+    this.thinkTimer = Math.random() * 0.3;
     this.currentGoal = 'wander';
     this.path = [];
     this.pathIndex = 0;
     this.bombCooldown = 0;
   }
 
-  /** Main update — called each frame */
   update(
     dt: number,
     grid: GameGrid,
@@ -50,40 +61,39 @@ export class AIBot {
 
     if (this.thinkTimer <= 0) {
       this.think(grid, bombs, powerups, allPlayers);
-      // Re-think every 0.3-0.5s (randomized)
       this.thinkTimer = 0.3 + Math.random() * 0.2;
     }
 
-    this.navigatePath();
+    this.navigatePath(grid, bombs);
   }
 
-  /** Make a new decision about what to do */
+  // ---------------------------------------------------------------------------
+  // Decision making
+  // ---------------------------------------------------------------------------
+
   private think(
     grid: GameGrid,
     bombs: BombManager,
     powerups: PowerupManager,
     allPlayers: Player[],
   ): void {
-    // Clear previous inputs
     this.clearInputs();
+    const pos = this.player.getGridPos();
 
-    // Priority 1: FLEE — if in danger, run away
-    if (this.isInDanger(grid, bombs)) {
+    // ── Priority 1: ESCAPE ──────────────────────────────────────────────
+    if (!this.isCellSafe(pos.col, pos.row, grid, bombs)) {
       const safe = this.findSafePosition(grid, bombs);
       if (safe) {
-        const pos = this.player.getGridPos();
-        this.path = this.findPath(pos.col, pos.row, safe.col, safe.row, grid, bombs, true);
+        this.path = this.findFleePath(pos.col, pos.row, safe.col, safe.row, grid, bombs);
         this.pathIndex = 0;
         this.currentGoal = 'flee';
         return;
       }
-      // No safe position found — try to move anyway (wander to escape)
     }
 
-    // Priority 2: SEEK POWERUP — go collect a revealed powerup
-    const powerupTarget = this.findNearestPowerup(grid, powerups, bombs);
+    // ── Priority 2: SEEK POWERUP ────────────────────────────────────────
+    const powerupTarget = this.findNearestPowerup(powerups, bombs, grid);
     if (powerupTarget) {
-      const pos = this.player.getGridPos();
       this.path = this.findPath(pos.col, pos.row, powerupTarget.col, powerupTarget.row, grid, bombs, false);
       if (this.path.length > 0) {
         this.pathIndex = 0;
@@ -92,22 +102,25 @@ export class AIBot {
       }
     }
 
-    // Priority 3: ATTACK — find a position near bricks/enemies to bomb
-    const bombTarget = this.findBombPosition(grid, allPlayers, bombs);
+    // ── Priority 3: ATTACK (brick destroy / enemy hunt) ─────────────────
+    const bombTarget = this.findBombTarget(grid, allPlayers, bombs);
     if (bombTarget) {
-      const pos = this.player.getGridPos();
       if (pos.col === bombTarget.col && pos.row === bombTarget.row) {
-        // Already at the target — place bomb if we can and it's safe to do so
-        if (this.bombCooldown <= 0 && this.canPlaceBomb(bombs) && this.hasSafeEscape(pos.col, pos.row, grid, bombs)) {
+        // At target — try to place bomb
+        if (this.bombCooldown <= 0 &&
+            this.canPlaceBomb(bombs) &&
+            !bombs.hasBomb(pos.col, pos.row) &&
+            this.isCellSafe(pos.col, pos.row, grid, bombs) &&
+            this.simPlaceBombIsSafe(pos.col, pos.row, grid, bombs)) {
           this.player.inputBomb = true;
-          this.bombCooldown = 1.5; // Don't spam bombs
-          // Immediately flee after placing
+          this.bombCooldown = 1.5;
+          // Re-think quickly to flee
           this.thinkTimer = 0.05;
-          this.currentGoal = 'flee';
           return;
         }
       } else {
-        this.path = this.findPath(pos.col, pos.row, bombTarget.col, bombTarget.row, grid, bombs, false);
+        // Navigate toward target (avoid danger zones)
+        this.path = this.findPath(pos.col, pos.row, bombTarget.col, bombTarget.row, grid, bombs, true);
         if (this.path.length > 0) {
           this.pathIndex = 0;
           this.currentGoal = 'attack';
@@ -116,17 +129,141 @@ export class AIBot {
       }
     }
 
-    // Priority 4: WANDER — move randomly
+    // ── Priority 4: WANDER ──────────────────────────────────────────────
     this.wander(grid, bombs);
   }
 
-  /** Am I in danger? (standing in a ticking bomb's blast range or on an active explosion) */
-  private isInDanger(grid: GameGrid, bombs: BombManager): boolean {
-    const pos = this.player.getGridPos();
-    return !this.isCellSafe(pos.col, pos.row, grid, bombs);
+  // ---------------------------------------------------------------------------
+  // Danger map helpers (fpc_atomic: IsSurvivable)
+  // ---------------------------------------------------------------------------
+
+  /** Build a 2-D boolean danger map for ALL existing bombs. true = dangerous. */
+  private buildDangerMap(grid: GameGrid, bombs: BombManager): boolean[][] {
+    const danger: boolean[][] = [];
+    for (let c = 0; c < GRID_COLS; c++) {
+      danger[c] = new Array(GRID_ROWS).fill(false);
+    }
+
+    for (const bomb of bombs.bombs) {
+      if (bomb.exploded) continue;
+      danger[bomb.col][bomb.row] = true;
+
+      for (const dir of DIRS) {
+        for (let i = 1; i <= bomb.range; i++) {
+          const c = bomb.col + dir.dx * i;
+          const r = bomb.row + dir.dy * i;
+          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
+          const cell = grid.getCell(c, r);
+          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
+          danger[c][r] = true;
+        }
+      }
+    }
+
+    // Also mark active explosions
+    for (let c = 0; c < GRID_COLS; c++) {
+      for (let r = 0; r < GRID_ROWS; r++) {
+        if (bombs.isExploding(c, r)) danger[c][r] = true;
+      }
+    }
+
+    return danger;
   }
 
-  /** Find the nearest safe position to flee to (BFS, treating danger zones as impassable) */
+  /** Add a simulated bomb's blast to an existing danger map (fpc_atomic: SimPlaceBomb). */
+  private addSimulatedBombToDangerMap(
+    danger: boolean[][],
+    bombCol: number,
+    bombRow: number,
+    range: number,
+    grid: GameGrid,
+  ): void {
+    danger[bombCol][bombRow] = true;
+    for (const dir of DIRS) {
+      for (let i = 1; i <= range; i++) {
+        const c = bombCol + dir.dx * i;
+        const r = bombRow + dir.dy * i;
+        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
+        const cell = grid.getCell(c, r);
+        if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
+        danger[c][r] = true;
+      }
+    }
+  }
+
+  /**
+   * fpc_atomic: SimPlaceBomb + reachability check.
+   * Simulates placing a bomb at (col, row), builds the full danger map
+   * including the new bomb, and BFS-checks that at least one walkable,
+   * reachable cell from (col, row) is safe.
+   */
+  private simPlaceBombIsSafe(
+    col: number,
+    row: number,
+    grid: GameGrid,
+    bombs: BombManager,
+  ): boolean {
+    const danger = this.buildDangerMap(grid, bombs);
+    this.addSimulatedBombToDangerMap(danger, col, row, this.player.stats.bombRange, grid);
+
+    // BFS from (col, row) through walkable, non-bomb cells
+    const visited = new Set<string>();
+    const queue: GridPos[] = [{ col, row }];
+    visited.add(`${col},${row}`);
+
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+
+      // Is this cell survivable? (not the bomb cell itself)
+      if ((cur.col !== col || cur.row !== row) && !danger[cur.col][cur.row]) {
+        return true; // Found at least one safe reachable cell
+      }
+
+      for (const dir of DIRS) {
+        const nc = cur.col + dir.dx;
+        const nr = cur.row + dir.dy;
+        const key = `${nc},${nr}`;
+        if (visited.has(key)) continue;
+        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        if (!grid.isWalkable(nc, nr)) continue;
+        if (bombs.hasBomb(nc, nr)) continue;
+        visited.add(key);
+        queue.push({ col: nc, row: nr });
+      }
+    }
+
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cell safety (uses bomb blast tracing, not the full danger map)
+  // ---------------------------------------------------------------------------
+
+  private isCellSafe(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
+    if (bombs.isExploding(col, row)) return false;
+
+    for (const bomb of bombs.bombs) {
+      if (bomb.exploded) continue;
+      if (bomb.col === col && bomb.row === row) return false;
+
+      for (const dir of DIRS) {
+        for (let i = 1; i <= bomb.range; i++) {
+          const c = bomb.col + dir.dx * i;
+          const r = bomb.row + dir.dy * i;
+          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
+          const cell = grid.getCell(c, r);
+          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
+          if (c === col && r === row) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Escape
+  // ---------------------------------------------------------------------------
+
   private findSafePosition(grid: GameGrid, bombs: BombManager): GridPos | null {
     const pos = this.player.getGridPos();
     const visited = new Set<string>();
@@ -135,35 +272,32 @@ export class AIBot {
 
     while (queue.length > 0) {
       const current = queue.shift()!;
-
-      // If this cell is safe and walkable, return it
       if (this.isCellSafe(current.col, current.row, grid, bombs) &&
           grid.isWalkable(current.col, current.row) &&
-          !bombs.hasBomb(current.col, current.row)) {
-        // Don't return our own position
-        if (current.col !== pos.col || current.row !== pos.row) {
-          return current;
-        }
+          !bombs.hasBomb(current.col, current.row) &&
+          (current.col !== pos.col || current.row !== pos.row)) {
+        return current;
       }
 
       for (const dir of DIRS) {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS) {
-          if (grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
-            visited.add(key);
-            queue.push({ col: nc, row: nr });
-          }
+        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+            grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
+          visited.add(key);
+          queue.push({ col: nc, row: nr });
         }
       }
     }
-
     return null;
   }
 
-  /** Find the nearest reachable revealed powerup */
-  private findNearestPowerup(grid: GameGrid, powerups: PowerupManager, bombs: BombManager): GridPos | null {
+  // ---------------------------------------------------------------------------
+  // Powerups
+  // ---------------------------------------------------------------------------
+
+  private findNearestPowerup(powerups: PowerupManager, bombs: BombManager, grid: GameGrid): GridPos | null {
     const revealed = powerups.powerups.filter((p) => p.revealed);
     if (revealed.length === 0) return null;
 
@@ -172,22 +306,30 @@ export class AIBot {
     let best: GridPos | null = null;
 
     for (const p of revealed) {
+      if (!this.isCellSafe(p.col, p.row, grid, bombs)) continue;
       const dist = Math.abs(p.col - pos.col) + Math.abs(p.row - pos.row);
       if (dist < bestDist) {
         bestDist = dist;
         best = { col: p.col, row: p.row };
       }
     }
-
     return best;
   }
 
-  /** Find a good position to place a bomb (near bricks or enemies) */
-  private findBombPosition(grid: GameGrid, allPlayers: Player[], bombs: BombManager): GridPos | null {
+  // ---------------------------------------------------------------------------
+  // Attack — find best bomb target (fpc_atomic: BrickDestroyAi)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Score every reachable tile by how many bricks a bomb placed there would
+   * destroy, biased toward closer tiles.  Return the best candidate.
+   * Also considers tiles adjacent to enemy players.
+   */
+  private findBombTarget(grid: GameGrid, allPlayers: Player[], bombs: BombManager): GridPos | null {
     const pos = this.player.getGridPos();
     const range = this.player.stats.bombRange;
 
-    // BFS outward from current position to find a cell adjacent to bricks or enemies
+    // BFS outward; score each tile
     const visited = new Set<string>();
     const queue: { col: number; row: number; dist: number }[] = [
       { col: pos.col, row: pos.row, dist: 0 },
@@ -195,33 +337,35 @@ export class AIBot {
     visited.add(`${pos.col},${pos.row}`);
 
     let bestTarget: GridPos | null = null;
-    let bestDist = Infinity;
+    let bestScore = 0;
 
     while (queue.length > 0) {
       const current = queue.shift()!;
 
-      // Check if placing a bomb here would hit a brick or enemy
-      if (this.wouldBombBeUseful(current.col, current.row, range, grid, allPlayers)) {
-        if (current.dist < bestDist) {
-          bestDist = current.dist;
+      // Don't search too far
+      if (current.dist > 8) continue;
+
+      // Score this tile
+      const brickCount = this.countBricksHit(current.col, current.row, range, grid);
+      const enemyNear = this.wouldHitEnemy(current.col, current.row, range, grid, allPlayers);
+
+      if (brickCount > 0 || enemyNear) {
+        // Score: bricks destroyed, biased by closeness (fpc_atomic picks max bricks, closest)
+        const score = (brickCount + (enemyNear ? 3 : 0)) * 10 - current.dist;
+        if (score > bestScore) {
+          bestScore = score;
           bestTarget = { col: current.col, row: current.row };
         }
-        // Don't break — keep searching for closer targets
-        continue;
       }
-
-      // Don't search too far
-      if (current.dist >= 10) continue;
 
       for (const dir of DIRS) {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS) {
-          if (grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
-            visited.add(key);
-            queue.push({ col: nc, row: nr, dist: current.dist + 1 });
-          }
+        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+            grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
+          visited.add(key);
+          queue.push({ col: nc, row: nr, dist: current.dist + 1 });
         }
       }
     }
@@ -229,28 +373,39 @@ export class AIBot {
     return bestTarget;
   }
 
-  /** Check if placing a bomb at (col, row) would hit a brick wall or enemy */
-  private wouldBombBeUseful(col: number, row: number, range: number, grid: GameGrid, allPlayers: Player[]): boolean {
+  /** Count how many bricks a bomb at (col, row) would destroy. */
+  private countBricksHit(col: number, row: number, range: number, grid: GameGrid): number {
+    let count = 0;
     for (const dir of DIRS) {
       for (let i = 1; i <= range; i++) {
         const c = col + dir.dx * i;
         const r = row + dir.dy * i;
         if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-
         const cell = grid.getCell(c, r);
         if (!cell) break;
-
-        // Solid wall stops blast
         if (cell.type === CellContent.Solid) break;
+        if (cell.type === CellContent.Brick) {
+          count++;
+          break; // blast stops at brick
+        }
+      }
+    }
+    return count;
+  }
 
-        // Would destroy a brick
-        if (cell.type === CellContent.Brick) return true;
-
-        // Would hit an enemy player
+  /** Would a bomb at (col, row) hit any enemy player? */
+  private wouldHitEnemy(col: number, row: number, range: number, grid: GameGrid, allPlayers: Player[]): boolean {
+    for (const dir of DIRS) {
+      for (let i = 1; i <= range; i++) {
+        const c = col + dir.dx * i;
+        const r = row + dir.dy * i;
+        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
+        const cell = grid.getCell(c, r);
+        if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
         for (const p of allPlayers) {
           if (p.index !== this.player.index && p.alive) {
-            const pPos = p.getGridPos();
-            if (pPos.col === c && pPos.row === r) return true;
+            const pp = p.getGridPos();
+            if (pp.col === c && pp.row === r) return true;
           }
         }
       }
@@ -258,15 +413,49 @@ export class AIBot {
     return false;
   }
 
-  /** Simple BFS pathfinding */
-  private findPath(
-    startCol: number,
-    startRow: number,
-    endCol: number,
-    endRow: number,
-    grid: GameGrid,
-    bombs: BombManager,
-    avoidDanger: boolean,
+  private canPlaceBomb(bombs: BombManager): boolean {
+    const active = bombs.bombs.filter((b) => !b.exploded && b.owner === this.player.index).length;
+    return active < this.player.stats.maxBombs;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wander — random safe movement
+  // ---------------------------------------------------------------------------
+
+  private wander(grid: GameGrid, bombs: BombManager): void {
+    const pos = this.player.getGridPos();
+    const candidates: GridPos[] = [];
+
+    for (const dir of DIRS) {
+      const nc = pos.col + dir.dx;
+      const nr = pos.row + dir.dy;
+      if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+          grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr) &&
+          this.isCellSafe(nc, nr, grid, bombs)) {
+        candidates.push({ col: nc, row: nr });
+      }
+    }
+
+    if (candidates.length > 0) {
+      const target = candidates[Math.floor(Math.random() * candidates.length)];
+      this.path = [target];
+      this.pathIndex = 0;
+      this.currentGoal = 'wander';
+    } else {
+      this.path = [];
+      this.pathIndex = 0;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pathfinding
+  // ---------------------------------------------------------------------------
+
+  private bfsPath(
+    startCol: number, startRow: number,
+    endCol: number, endRow: number,
+    grid: GameGrid, bombs: BombManager,
+    extraFilter: (nc: number, nr: number) => boolean,
   ): GridPos[] {
     if (startCol === endCol && startRow === endRow) return [];
 
@@ -281,7 +470,6 @@ export class AIBot {
       const currentKey = `${current.col},${current.row}`;
 
       if (current.col === endCol && current.row === endRow) {
-        // Reconstruct path
         const path: GridPos[] = [];
         let key = currentKey;
         while (key !== startKey) {
@@ -297,198 +485,117 @@ export class AIBot {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-
         if (visited.has(key)) continue;
         if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
         if (!grid.isWalkable(nc, nr)) continue;
         if (bombs.hasBomb(nc, nr)) continue;
-        if (avoidDanger && !this.isCellSafe(nc, nr, grid, bombs)) continue;
-
+        if (!extraFilter(nc, nr)) continue;
         visited.add(key);
         parent.set(key, currentKey);
         queue.push({ col: nc, row: nr });
       }
     }
 
-    // No path found — if we were avoiding danger, try without
-    if (avoidDanger) {
-      return this.findPath(startCol, startRow, endCol, endRow, grid, bombs, false);
-    }
-
     return [];
   }
 
-  /** Check if a cell is safe (not in any bomb's blast range and not exploding) */
-  private isCellSafe(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
-    // Check active explosions
-    if (bombs.isExploding(col, row)) return false;
-
-    // Check if in blast range of any ticking bomb
-    for (const bomb of bombs.bombs) {
-      if (bomb.exploded) continue;
-
-      // Is cell the bomb's own cell?
-      if (bomb.col === col && bomb.row === row) return false;
-
-      // Check each direction from the bomb
-      for (const dir of DIRS) {
-        for (let i = 1; i <= bomb.range; i++) {
-          const c = bomb.col + dir.dx * i;
-          const r = bomb.row + dir.dy * i;
-
-          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-
-          const cell = grid.getCell(c, r);
-          if (!cell) break;
-          if (cell.type === CellContent.Solid) break;
-          if (cell.type === CellContent.Brick) break;
-
-          if (c === col && r === row) return false;
-        }
-      }
+  private findPath(
+    startCol: number, startRow: number,
+    endCol: number, endRow: number,
+    grid: GameGrid, bombs: BombManager,
+    avoidDanger: boolean,
+  ): GridPos[] {
+    const result = this.bfsPath(
+      startCol, startRow, endCol, endRow, grid, bombs,
+      avoidDanger ? (nc, nr) => this.isCellSafe(nc, nr, grid, bombs) : () => true,
+    );
+    if (result.length === 0 && avoidDanger) {
+      // Fallback: allow walking through bomb blast zones of unexploded bombs
+      // (the bot can outrun the fuse) but NEVER through active explosions
+      return this.bfsPath(startCol, startRow, endCol, endRow, grid, bombs, () => true);
     }
-
-    return true;
+    return result;
   }
 
-  /** Check whether we can place a bomb (have available bomb slots) */
-  private canPlaceBomb(bombs: BombManager): boolean {
-    const activeBombs = bombs.bombs.filter(
-      (b) => !b.exploded && b.owner === this.player.index,
-    ).length;
-    return activeBombs < this.player.stats.maxBombs;
+  private findFleePath(
+    startCol: number, startRow: number,
+    endCol: number, endRow: number,
+    grid: GameGrid, bombs: BombManager,
+  ): GridPos[] {
+    // Never walk into an active explosion
+    return this.bfsPath(
+      startCol, startRow, endCol, endRow, grid, bombs,
+      (nc, nr) => !bombs.isExploding(nc, nr),
+    );
   }
 
-  /** Check if there's a safe cell to escape to after placing a bomb at (col, row) */
-  private hasSafeEscape(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
-    // Simulate: pretend there's a bomb at (col, row) with our range
-    // Check if any adjacent cell is safe from all bombs including this simulated one
-    const simRange = this.player.stats.bombRange;
+  // ---------------------------------------------------------------------------
+  // Navigation
+  // ---------------------------------------------------------------------------
 
-    for (const dir of DIRS) {
-      const nc = col + dir.dx;
-      const nr = row + dir.dy;
-      if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
-      if (!grid.isWalkable(nc, nr)) continue;
-      if (bombs.hasBomb(nc, nr)) continue;
-
-      // Check if (nc, nr) would be in blast range of the simulated bomb
-      if (this.isInSimulatedBlast(nc, nr, col, row, simRange, grid)) continue;
-
-      // Also check existing bomb danger
-      if (!this.isCellSafe(nc, nr, grid, bombs)) continue;
-
-      // Found at least one escape direction — check if we can go further
-      // (we need at least a path of cells to be truly safe)
-      return true;
-    }
-    return false;
-  }
-
-  /** Check if a cell is in the blast range of a simulated bomb */
-  private isInSimulatedBlast(
-    col: number,
-    row: number,
-    bombCol: number,
-    bombRow: number,
-    range: number,
-    grid: GameGrid,
-  ): boolean {
-    if (col === bombCol && row === bombRow) return true;
-
-    for (const dir of DIRS) {
-      for (let i = 1; i <= range; i++) {
-        const c = bombCol + dir.dx * i;
-        const r = bombRow + dir.dy * i;
-        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-        const cell = grid.getCell(c, r);
-        if (!cell) break;
-        if (cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-        if (c === col && r === row) return true;
-      }
-    }
-    return false;
-  }
-
-  /** Wander randomly to explore the map */
-  private wander(grid: GameGrid, bombs: BombManager): void {
-    const pos = this.player.getGridPos();
-
-    // Pick a random walkable neighbor
-    const candidates: GridPos[] = [];
-    for (const dir of DIRS) {
-      const nc = pos.col + dir.dx;
-      const nr = pos.row + dir.dy;
-      if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS) {
-        if (grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr) && this.isCellSafe(nc, nr, grid, bombs)) {
-          candidates.push({ col: nc, row: nr });
-        }
-      }
-    }
-
-    if (candidates.length > 0) {
-      const target = candidates[Math.floor(Math.random() * candidates.length)];
-      this.path = [target];
-      this.pathIndex = 0;
-      this.currentGoal = 'wander';
-    } else {
-      this.path = [];
-      this.pathIndex = 0;
-    }
-  }
-
-  /** Navigate along the current path — sets player input flags */
-  private navigatePath(): void {
+  private navigatePath(grid: GameGrid, bombs: BombManager): void {
     this.clearInputs();
 
-    if (this.path.length === 0 || this.pathIndex >= this.path.length) {
+    if (this.path.length === 0 || this.pathIndex >= this.path.length) return;
+
+    const target = this.path[this.pathIndex];
+
+    // Safety check: if the next waypoint is dangerous and we're NOT fleeing,
+    // abort the path and force an immediate re-think.
+    if (this.currentGoal !== 'flee' && !this.isCellSafe(target.col, target.row, grid, bombs)) {
+      this.path = [];
+      this.pathIndex = 0;
+      this.thinkTimer = 0; // re-think next frame
       return;
     }
 
-    const target = this.path[this.pathIndex];
-    const px = this.player.x;
-    const py = this.player.y;
+    // Even when fleeing, if we're about to step into an active explosion, stop
+    if (bombs.isExploding(target.col, target.row)) {
+      this.path = [];
+      this.pathIndex = 0;
+      this.thinkTimer = 0;
+      return;
+    }
 
-    const dx = target.col - px;
-    const dy = target.row - py;
-
-    // Threshold for considering we've reached the target cell
+    const dx = target.col - this.player.x;
+    const dy = target.row - this.player.y;
     const threshold = 0.15;
 
     if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) {
-      // Close enough to this cell — move to next in path
       this.pathIndex++;
-      if (this.pathIndex >= this.path.length) {
-        // Path complete
+      if (this.pathIndex >= this.path.length) return;
+      const next = this.path[this.pathIndex];
+
+      // Check the NEXT waypoint too
+      if (!this.isCellSafe(next.col, next.row, grid, bombs) && this.currentGoal !== 'flee') {
+        this.path = [];
+        this.pathIndex = 0;
+        this.thinkTimer = 0;
         return;
       }
-      // Continue navigating to next cell
-      const next = this.path[this.pathIndex];
-      this.setDirectionToward(next.col - px, next.row - py);
+      if (bombs.isExploding(next.col, next.row)) {
+        this.path = [];
+        this.pathIndex = 0;
+        this.thinkTimer = 0;
+        return;
+      }
+
+      this.setDirectionToward(next.col - this.player.x, next.row - this.player.y);
     } else {
       this.setDirectionToward(dx, dy);
     }
   }
 
-  /** Set movement input flags based on direction vector */
   private setDirectionToward(dx: number, dy: number): void {
-    // Move along the axis with the larger difference (one axis at a time for grid movement)
     if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > 0.05) {
-        this.player.setInput('right', true);
-      } else if (dx < -0.05) {
-        this.player.setInput('left', true);
-      }
+      if (dx > 0.05) this.player.setInput('right', true);
+      else if (dx < -0.05) this.player.setInput('left', true);
     } else {
-      if (dy > 0.05) {
-        this.player.setInput('down', true);
-      } else if (dy < -0.05) {
-        this.player.setInput('up', true);
-      }
+      if (dy > 0.05) this.player.setInput('down', true);
+      else if (dy < -0.05) this.player.setInput('up', true);
     }
   }
 
-  /** Clear all movement inputs */
   private clearInputs(): void {
     this.player.setInput('up', false);
     this.player.setInput('down', false);
