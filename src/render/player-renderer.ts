@@ -15,6 +15,23 @@ export const PLAYER_COLORS: string[] = [
   '#FF88CC', // Player 10: Pink
 ];
 
+/**
+ * Hue-rotate offsets (degrees) to shift the base green sprite to each player color.
+ * Base sprite hue is ~120° (green).
+ */
+const PLAYER_HUE_SHIFTS: number[] = [
+  -120,  // P1: White (desaturate handled separately)
+   240,  // P2: Red (120° → 360°/0°)
+   120,  // P3: Blue (120° → 240°)
+     0,  // P4: Green (no shift)
+   -60,  // P5: Yellow (120° → 60°)
+    60,  // P6: Cyan (120° → 180°)
+   -90,  // P7: Orange (120° → 30°)
+   150,  // P8: Purple (120° → 270°)
+  -120,  // P9: Gray (desaturate)
+   -80,  // P10: Pink (120° → 330°-ish)
+];
+
 interface LoadedPlayerAnimation {
   frames: HTMLCanvasElement[];
   hotspots: { x: number; y: number }[];
@@ -142,12 +159,6 @@ export class PlayerRenderer {
       return false;
     }
 
-    const shadowFrame = this.importedSprites.shadow?.frames[0];
-    const shadowHotspot = this.importedSprites.shadow?.hotspots[0];
-    if (shadowFrame && shadowHotspot) {
-      this.drawImportedFrame(ctx, shadowFrame, shadowHotspot, cx, cy, tileH, false);
-    }
-
     const frameData = player.moving
       ? this.selectWalkFrame(this.importedSprites.walk, player.facing, elapsedTime)
       : this.selectStandFrame(this.importedSprites.stand, player.facing);
@@ -156,13 +167,34 @@ export class PlayerRenderer {
       return false;
     }
 
+    // Compute a uniform scale from the player sprite height
+    const playerSpriteH = Math.max(1, frameData.frame.height);
+    const targetHeight = tileH * PLAYER_SPRITE_HEIGHT_TILES;
+    const spriteScale = targetHeight / playerSpriteH;
+
+    // Draw shadow scaled to roughly one tile wide
+    const shadowFrame = this.importedSprites.shadow?.frames[0];
+    const shadowHotspot = this.importedSprites.shadow?.hotspots[0];
+    if (shadowFrame && shadowHotspot) {
+      const shadowScale = (tileH * 1.2) / Math.max(1, shadowFrame.width);
+      this.drawScaledFrame(ctx, shadowFrame, shadowHotspot, cx, cy, shadowScale, false, 0.5);
+    }
+
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     if (!player.alive) {
       ctx.filter = 'grayscale(1) brightness(0.7)';
       ctx.globalAlpha = 0.9;
+    } else {
+      const hueShift = PLAYER_HUE_SHIFTS[player.index] ?? 0;
+      if (player.index === 0 || player.index === 8) {
+        // White/Gray players: desaturate + brighten
+        ctx.filter = `saturate(0) brightness(${player.index === 0 ? 1.6 : 1.0})`;
+      } else if (hueShift !== 0) {
+        ctx.filter = `hue-rotate(${hueShift}deg)`;
+      }
     }
-    this.drawImportedFrame(ctx, frameData.frame, frameData.hotspot, cx, cy, tileH, true);
+    this.drawScaledFrame(ctx, frameData.frame, frameData.hotspot, cx, cy, spriteScale, true);
     ctx.restore();
 
     if (!player.alive) {
@@ -172,17 +204,16 @@ export class PlayerRenderer {
     return true;
   }
 
-  private drawImportedFrame(
+  private drawScaledFrame(
     ctx: CanvasRenderingContext2D,
     frame: HTMLCanvasElement,
     hotspot: { x: number; y: number },
     cx: number,
     cy: number,
-    tileH: number,
+    scale: number,
     pixelated: boolean,
+    alpha = 1.0,
   ): void {
-    const targetHeight = tileH * PLAYER_SPRITE_HEIGHT_TILES;
-    const scale = targetHeight / Math.max(1, frame.height);
     const drawWidth = frame.width * scale;
     const drawHeight = frame.height * scale;
     const drawX = cx - hotspot.x * scale;
@@ -190,6 +221,7 @@ export class PlayerRenderer {
 
     ctx.save();
     ctx.imageSmoothingEnabled = !pixelated;
+    if (alpha < 1.0) ctx.globalAlpha = alpha;
     ctx.drawImage(frame, drawX, drawY, drawWidth, drawHeight);
     ctx.restore();
   }
