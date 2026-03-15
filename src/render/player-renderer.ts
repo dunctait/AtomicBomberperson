@@ -65,8 +65,17 @@ export class PlayerRenderer {
     const radius = Math.min(tileW, tileH) * 0.35;
     const color = PLAYER_COLORS[player.index] || '#FFF';
 
-    if (this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
-      return;
+    // Only attempt imported sprites if they loaded with valid frames
+    try {
+      if (this.importedSprites &&
+          this.importedSprites.stand.frames.length >= 4 &&
+          this.importedSprites.stand.frames[0].width > 0 &&
+          this.importedSprites.stand.frames[0].height > 0 &&
+          this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
+        return;
+      }
+    } catch {
+      // Fall through to circle rendering on any error
     }
 
     if (!player.alive) {

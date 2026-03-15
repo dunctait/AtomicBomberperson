@@ -9,6 +9,7 @@ export interface GameConfig {
   players: PlayerSlot[];
   map: string;
   mapFile: string | null;
+  winsRequired: number;
 }
 
 export const gameConfig: GameConfig = {
@@ -16,6 +17,7 @@ export const gameConfig: GameConfig = {
   players: [],
   map: 'BASIC',
   mapFile: null,
+  winsRequired: 3,
 };
 
 /** Reset config to defaults and build the player slot array. */
@@ -23,6 +25,7 @@ export function resetConfig(): void {
   gameConfig.playerCount = 4;
   gameConfig.map = 'BASIC';
   gameConfig.mapFile = null;
+  gameConfig.winsRequired = 3;
   rebuildSlots();
 }
 

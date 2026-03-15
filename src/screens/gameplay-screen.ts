@@ -1,5 +1,6 @@
 import type { GameState } from '../engine/state-machine';
 import { gameConfig } from './game-config';
+import { matchState, resetMatch, recordRoundResult } from '../engine/match-manager';
 import { CellContent, GameGrid } from '../engine/game-grid';
 import { GridRenderer } from '../render/grid-renderer';
 import { PlayerRenderer, PLAYER_COLORS } from '../render/player-renderer';
@@ -345,11 +346,19 @@ export function createGameplayScreen(
   let elapsedTime = 0;
   let currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile);
 
+  // Countdown state
+  let countdownActive = false;
+  let countdownTimer = 0;
+  const COUNTDOWN_READY_DURATION = 1.5;
+  const COUNTDOWN_GO_DURATION = 0.5;
+  const COUNTDOWN_TOTAL = COUNTDOWN_READY_DURATION + COUNTDOWN_GO_DURATION;
+
   // Win condition state
   let gameOver = false;
   let gameOverTimer = 0;
   let gameOverMessage = '';
-  const GAME_OVER_DELAY = 3.0; // seconds before returning to menu
+  let gameOverWinnerIndex = -1;
+  const GAME_OVER_DELAY = 3.0; // seconds before going to round results
 
   // HUD element reference
   let hudStatsEl: HTMLDivElement | null = null;
@@ -402,6 +411,11 @@ export function createGameplayScreen(
       playerRenderer.renderPlayer(ctx, p, gridRenderer.tileWidth, gridRenderer.tileHeight, elapsedTime);
     }
 
+    // Draw countdown overlay
+    if (countdownActive) {
+      renderCountdownOverlay(ctx);
+    }
+
     // Draw game over overlay
     if (gameOver) {
       renderGameOverOverlay(ctx);
@@ -427,7 +441,45 @@ export function createGameplayScreen(
     const remaining = Math.max(0, Math.ceil(GAME_OVER_DELAY - gameOverTimer));
     ctx.font = '12px "Press Start 2P", monospace';
     ctx.fillStyle = '#aaa';
-    ctx.fillText(`Returning to menu in ${remaining}...`, w / 2, h / 2 + 25);
+    ctx.fillText(`Continuing in ${remaining}...`, w / 2, h / 2 + 25);
+  }
+
+  function renderCountdownOverlay(ctx: CanvasRenderingContext2D): void {
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Semi-transparent overlay
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(0, 0, w, h);
+
+    const text = countdownTimer < COUNTDOWN_READY_DURATION ? 'READY...' : 'GO!';
+    const isGo = countdownTimer >= COUNTDOWN_READY_DURATION;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (isGo) {
+      ctx.font = 'bold 36px "Press Start 2P", monospace';
+      ctx.fillStyle = '#53d8fb';
+      ctx.shadowColor = '#53d8fb';
+      ctx.shadowBlur = 20;
+    } else {
+      ctx.font = 'bold 28px "Press Start 2P", monospace';
+      ctx.fillStyle = '#e94560';
+      ctx.shadowColor = '#e94560';
+      ctx.shadowBlur = 16;
+    }
+
+    ctx.fillText(text, w / 2, h / 2);
+
+    // Reset shadow
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+
+    // Round indicator
+    ctx.font = '10px "Press Start 2P", monospace';
+    ctx.fillStyle = '#7a7a9e';
+    ctx.fillText(`ROUND ${matchState.roundNumber}`, w / 2, h / 2 + 40);
   }
 
   function handleBombPlacement(): void {
@@ -494,8 +546,10 @@ export function createGameplayScreen(
       if (alivePlayers.length === 1) {
         const winner = alivePlayers[0];
         gameOverMessage = `PLAYER ${winner.index + 1} WINS!`;
+        gameOverWinnerIndex = winner.index;
       } else {
         gameOverMessage = 'DRAW!';
+        gameOverWinnerIndex = -1;
       }
     }
   }
@@ -536,11 +590,15 @@ export function createGameplayScreen(
     mapSource.className = 'gameplay-map-source';
     mapMeta.appendChild(mapSource);
 
+    // Summary lines exist but are hidden by default (debug info)
     const hudSummaries = appendGameplayHudSummaries(mapMeta);
+    for (const key of Object.keys(hudSummaries) as GameplayHudSummaryKey[]) {
+      hudSummaries[key].style.display = 'none';
+    }
 
     const controls = document.createElement('span');
     controls.className = 'gameplay-controls';
-    controls.textContent = 'Arrow keys to move | SPACE to bomb | ESC to quit';
+    controls.textContent = 'Arrows: move | SPACE: bomb | ESC: quit';
 
     root.append(mapMeta, controls);
     return { root, mapName, mapSource, ...hudSummaries };
@@ -627,10 +685,22 @@ export function createGameplayScreen(
 
       container.appendChild(wrapper);
 
+      // Reset match if first round
+      if (matchState.roundNumber === 0) {
+        const activeCount = gameConfig.players.filter((p) => p.type !== 'off').length;
+        resetMatch(activeCount, gameConfig.winsRequired);
+      }
+      matchState.roundNumber++;
+
       // Reset game over state
       gameOver = false;
       gameOverTimer = 0;
       gameOverMessage = '';
+      gameOverWinnerIndex = -1;
+
+      // Start countdown
+      countdownActive = true;
+      countdownTimer = 0;
 
       // Load scheme asynchronously
       loadScheme(gameConfig.map, gameConfig.mapFile)
@@ -656,11 +726,22 @@ export function createGameplayScreen(
 
       elapsedTime += dt;
 
+      // Handle countdown
+      if (countdownActive) {
+        countdownTimer += dt;
+        if (countdownTimer >= COUNTDOWN_TOTAL) {
+          countdownActive = false;
+        }
+        render();
+        return;
+      }
+
       // If game is over, just count down and transition
       if (gameOver) {
         gameOverTimer += dt;
         if (gameOverTimer >= GAME_OVER_DELAY) {
-          onTransition('main-menu');
+          recordRoundResult(gameOverWinnerIndex);
+          onTransition('round-results');
           return;
         }
         render();
@@ -716,19 +797,21 @@ export function createGameplayScreen(
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        // Reset match so next game starts fresh
+        matchState.roundNumber = 0;
         onTransition('main-menu');
         return;
       }
       if (e.key === ' ') {
         e.preventDefault();
       }
-      if (initialized && !gameOver) {
+      if (initialized && !gameOver && !countdownActive) {
         inputManager.onKeyDown(e);
       }
     },
 
     onKeyUp(e: KeyboardEvent) {
-      if (initialized && !gameOver) {
+      if (initialized && !gameOver && !countdownActive) {
         inputManager.onKeyUp(e);
       }
     },

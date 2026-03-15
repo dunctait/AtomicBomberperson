@@ -936,6 +936,120 @@ body {
   padding: 0 0.15rem;
 }
 
+/* ===== ROUND RESULTS SCREEN ===== */
+
+.round-results-screen {
+  background: radial-gradient(circle at center, #14142a 0%, #090912 100%);
+}
+
+.results-panel {
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 36px 0 24px;
+}
+
+.results-heading {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 18px;
+  color: #e94560;
+  text-shadow: 0 0 8px #e94560, 0 0 20px #e9456088;
+  text-align: center;
+}
+
+.results-match-winner {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 14px;
+  text-align: center;
+  text-shadow: 0 0 12px currentColor, 0 0 30px currentColor;
+  letter-spacing: 0.05em;
+}
+
+.results-scoreboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 360px;
+}
+
+.results-player-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  background: #16213e44;
+  border: 1px solid transparent;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.results-player-row--winner {
+  border-color: #53d8fb66;
+  box-shadow: 0 0 12px #53d8fb33;
+  background: #16213eaa;
+}
+
+.results-player-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid #000;
+  flex-shrink: 0;
+}
+
+.results-player-label {
+  font-size: 10px;
+  min-width: 2.5em;
+}
+
+.results-tally {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.results-tally-mark {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: #2a2a3e;
+  border: 1px solid #4a4a6e;
+}
+
+.results-tally-mark--filled {
+  border-color: transparent;
+}
+
+.results-win-count {
+  font-size: 12px;
+  min-width: 1.5em;
+  text-align: right;
+}
+
+.results-draw {
+  font-size: 10px;
+  color: #f0b25d;
+  text-align: center;
+}
+
+.results-prompt {
+  font-size: 10px;
+  color: #53d8fb;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+.results-hint {
+  font-size: 8px;
+  color: #4a4a6e;
+}
+
 /* ===== CANVAS (kept for future game use) ===== */
 
 canvas {

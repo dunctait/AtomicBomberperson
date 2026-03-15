@@ -10,6 +10,8 @@ import { mountVirtualStage, type VirtualStageElements } from '../ui/virtual-stag
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 10;
+const MIN_WINS = 1;
+const MAX_WINS = 10;
 
 interface AvailableMapOption {
   label: string;
@@ -221,6 +223,27 @@ export function createGameSetup(
         nextDisabled: availableMaps.length <= 1,
         onPrevious: () => cycleMap(-1, container),
         onNext: () => cycleMap(1, container),
+      }),
+    );
+
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'WINS TO WIN',
+        value: String(gameConfig.winsRequired),
+        previousDisabled: gameConfig.winsRequired <= MIN_WINS,
+        nextDisabled: gameConfig.winsRequired >= MAX_WINS,
+        onPrevious: () => {
+          if (gameConfig.winsRequired > MIN_WINS) {
+            gameConfig.winsRequired--;
+            render(container);
+          }
+        },
+        onNext: () => {
+          if (gameConfig.winsRequired < MAX_WINS) {
+            gameConfig.winsRequired++;
+            render(container);
+          }
+        },
       }),
     );
 
