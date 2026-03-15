@@ -104,4 +104,10 @@ export class GameGrid {
     if (!cell) return false;
     return cell.type === CellContent.Empty;
   }
+
+  /** Check if a cell has an active explosion (delegated to BombManager at runtime) */
+  isDangerous(col: number, row: number): boolean {
+    // This is a convenience stub — gameplay-screen checks BombManager directly
+    return false;
+  }
 }
