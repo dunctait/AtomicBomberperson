@@ -634,6 +634,7 @@ export function createGameplayScreen(
     canvas.classList.remove('hidden');
     gameplayHud?.root.classList.remove('hidden');
     hudStatsEl?.classList.remove('hidden');
+    canvas.focus(); // ensure keyboard events reach the game
 
     updateMapHud(schemeSummary);
     updateHudStats();
@@ -673,6 +674,7 @@ export function createGameplayScreen(
 
       canvas = document.createElement('canvas');
       canvas.className = 'gameplay-canvas hidden';
+      canvas.tabIndex = 0; // make canvas focusable so key events work
       wrapper.appendChild(canvas);
 
       // Player stats HUD (above the bottom info bar)
@@ -808,7 +810,8 @@ export function createGameplayScreen(
         onTransition('main-menu');
         return;
       }
-      if (e.key === ' ') {
+      // Prevent browser defaults for game keys (scrolling, etc.)
+      if (e.key === ' ' || e.key.startsWith('Arrow')) {
         e.preventDefault();
       }
       if (initialized && !gameOver && !countdownActive) {

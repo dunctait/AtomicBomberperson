@@ -295,7 +295,9 @@ export function createGameSetup(
     },
 
     onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
+      if (e.key === 'Enter') {
+        onTransition('gameplay');
+      } else if (e.key === 'Escape') {
         onTransition('main-menu');
       }
     },

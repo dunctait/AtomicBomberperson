@@ -177,7 +177,7 @@ export class PlayerRenderer {
     const shadowHotspot = this.importedSprites.shadow?.hotspots[0];
     if (shadowFrame && shadowHotspot) {
       const shadowScale = (tileH * 1.2) / Math.max(1, shadowFrame.width);
-      this.drawScaledFrame(ctx, shadowFrame, shadowHotspot, cx, cy, shadowScale, false, 0.5);
+      this.drawScaledFrame(ctx, shadowFrame, shadowHotspot, cx, cy, shadowScale, false, 0.4);
     }
 
     ctx.save();
