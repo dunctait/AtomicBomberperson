@@ -968,65 +968,105 @@ body {
 /* ===== ROUND RESULTS SCREEN ===== */
 
 .round-results-screen {
-  background: radial-gradient(circle at center, #14142a 0%, #090912 100%);
+  background:
+    radial-gradient(ellipse at 50% 0%, #1e1040 0%, #090912 55%),
+    radial-gradient(ellipse at 50% 100%, #0d1a30 0%, transparent 60%);
 }
 
 .results-panel {
   width: 100%;
-  max-width: 460px;
+  max-width: 480px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.2rem;
-  padding: 36px 0 24px;
+  gap: 1rem;
+  padding: 28px 0 20px;
 }
 
 .results-heading {
   font-family: 'Press Start 2P', monospace;
-  font-size: 18px;
+  font-size: 20px;
   color: #e94560;
-  text-shadow: 0 0 8px #e94560, 0 0 20px #e9456088;
+  text-shadow:
+    0 0 8px #e94560,
+    0 0 24px #e9456088;
   text-align: center;
+  letter-spacing: 0.08em;
 }
 
+/* Round winner banner */
+.results-round-winner {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+  text-align: center;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 10px var(--player-color, #fff), 0 0 24px var(--player-color, #fff);
+  padding: 6px 16px;
+  border: 1px solid color-mix(in srgb, var(--player-color, #fff) 40%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--player-color, #fff) 8%, transparent);
+}
+
+/* Match winner announcement */
 .results-match-winner {
   font-family: 'Press Start 2P', monospace;
   font-size: 14px;
   text-align: center;
-  text-shadow: 0 0 12px currentColor, 0 0 30px currentColor;
-  letter-spacing: 0.05em;
+  text-shadow: 0 0 14px var(--player-color, #fff), 0 0 36px var(--player-color, #fff);
+  letter-spacing: 0.06em;
+  padding: 8px 20px;
+  border: 2px solid color-mix(in srgb, var(--player-color, #fff) 60%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--player-color, #fff) 10%, transparent);
+}
+
+/* "First to N wins" subtitle */
+.results-target {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: #7a7a9e;
+  letter-spacing: 0.12em;
+  text-align: center;
 }
 
 .results-scoreboard {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.5rem;
   width: 100%;
-  max-width: 360px;
+  max-width: 390px;
 }
 
 .results-player-row {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: 4px;
+  gap: 0.55rem;
+  padding: 6px 10px;
+  border-radius: 5px;
   background: #16213e44;
   border: 1px solid transparent;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .results-player-row--winner {
-  border-color: #53d8fb66;
-  box-shadow: 0 0 12px #53d8fb33;
-  background: #16213eaa;
+  border-color: color-mix(in srgb, var(--player-color, #53d8fb) 50%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--player-color, #53d8fb) 25%, transparent);
+  background: color-mix(in srgb, var(--player-color, #53d8fb) 8%, #16213e);
+}
+
+.results-player-row--match-winner {
+  border-color: color-mix(in srgb, var(--player-color, #ffd700) 70%, transparent);
+  box-shadow:
+    0 0 14px color-mix(in srgb, var(--player-color, #ffd700) 40%, transparent),
+    inset 0 0 8px color-mix(in srgb, var(--player-color, #ffd700) 10%, transparent);
+  background: color-mix(in srgb, var(--player-color, #ffd700) 12%, #16213e);
 }
 
 .results-player-dot {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   border: 1px solid #000;
   flex-shrink: 0;
@@ -1034,22 +1074,25 @@ body {
 
 .results-player-label {
   font-size: 10px;
-  min-width: 2.5em;
+  min-width: 2.2em;
+  font-family: 'Press Start 2P', monospace;
 }
 
 .results-tally {
   display: flex;
   gap: 4px;
   flex: 1;
+  align-items: center;
 }
 
 .results-tally-mark {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border-radius: 2px;
-  background: #2a2a3e;
-  border: 1px solid #4a4a6e;
+  background: #1e1e30;
+  border: 1px solid #3a3a5e;
+  flex-shrink: 0;
 }
 
 .results-tally-mark--filled {
@@ -1057,21 +1100,48 @@ body {
 }
 
 .results-win-count {
-  font-size: 12px;
-  min-width: 1.5em;
+  font-size: 10px;
+  min-width: 2.5em;
   text-align: right;
+  font-family: 'Press Start 2P', monospace;
+  opacity: 0.9;
+}
+
+/* Crown / star icons shown next to winner rows */
+.results-crown {
+  font-size: 13px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.results-crown--round {
+  /* color is set inline to match the player color */
+  text-shadow: 0 0 6px currentColor;
+}
+
+.results-crown--match {
+  color: #ffd700;
+  text-shadow: 0 0 10px #ffd700, 0 0 24px #ffd70088;
 }
 
 .results-draw {
-  font-size: 10px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
   color: #f0b25d;
   text-align: center;
+  letter-spacing: 0.06em;
+  padding: 5px 14px;
+  border: 1px solid #f0b25d44;
+  border-radius: 4px;
+  background: #f0b25d0d;
 }
 
 .results-prompt {
+  font-family: 'Press Start 2P', monospace;
   font-size: 10px;
   color: #53d8fb;
   animation: blink 1s steps(2, start) infinite;
+  margin-top: 4px;
 }
 
 .results-hint {

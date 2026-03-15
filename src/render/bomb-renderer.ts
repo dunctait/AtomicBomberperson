@@ -2,7 +2,7 @@ import type { Bomb, Explosion } from '../engine/bomb';
 import { assets } from '../assets/asset-registry';
 
 /**
- * FLAME.ANI frame layout (5 animation frames each):
+ * EXPLODE.ANI / FLAME.ANI frame layout (5 animation frames each):
  *  0- 4: END   — right end cap
  *  5- 9: ENDU  — up end cap
  * 10-14: SQUARE — center (bomb origin)
@@ -44,11 +44,21 @@ export class BombRenderer {
       }
     }).catch(() => {});
 
-    void assets.getAnimation('FLAME.ANI').then((anim) => {
+    // Try EXPLODE.ANI first; fall back to FLAME.ANI if it is not available.
+    // Both files share the same 7-group × 5-frame layout defined by the
+    // FLAME_* constants above.
+    void assets.getAnimation('EXPLODE.ANI').then((anim) => {
       if (anim.frames.length >= 35) {
         this.flameFrames = anim.frames;
       }
-    }).catch(() => {});
+    }).catch(() => {
+      // EXPLODE.ANI not found — try FLAME.ANI as fallback sprite source
+      void assets.getAnimation('FLAME.ANI').then((anim) => {
+        if (anim.frames.length >= 35) {
+          this.flameFrames = anim.frames;
+        }
+      }).catch(() => {});
+    });
   }
 
   /** Draw all bombs */

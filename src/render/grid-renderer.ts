@@ -6,8 +6,11 @@ const TILE_FRAME_EMPTY = 0;
 const TILE_FRAME_BRICK = 1;
 const TILE_FRAME_SOLID = 2;
 
-const BRICK_CRUMBLE_DURATION = 0.5; // seconds for the brick destruction animation
-const BRICK_CRUMBLE_FRAMES = 9;     // XBRICK0.ANI has 9 frames
+/**
+ * Duration of the brick destruction animation in seconds.
+ * Slightly longer than 0.5s gives a smoother feel across all 9 frames.
+ */
+const BRICK_CRUMBLE_DURATION = 0.6;
 
 interface CrumblingBrick {
   col: number;
@@ -49,11 +52,19 @@ export class GridRenderer {
       }
     }).catch(() => {});
 
+    // Try XBRICK0.ANI first (preferred), fall back to BRICK.ANI
     void assets.getAnimation('XBRICK0.ANI').then((anim) => {
-      if (anim.frames.length >= BRICK_CRUMBLE_FRAMES) {
+      if (anim.frames.length > 0) {
         this.crumbleSprites = anim.frames;
       }
-    }).catch(() => {});
+    }).catch(() => {
+      // XBRICK0.ANI not found — try the alternate asset name
+      void assets.getAnimation('BRICK.ANI').then((anim) => {
+        if (anim.frames.length > 0) {
+          this.crumbleSprites = anim.frames;
+        }
+      }).catch(() => {});
+    });
   }
 
   /** Notify that bricks were destroyed — starts crumble animations */
@@ -105,17 +116,27 @@ export class GridRenderer {
   ): void {
     if (!this.crumbleSprites) return;
 
+    const frameCount = this.crumbleSprites.length;
+
     for (const brick of this.crumblingBricks) {
-      const progress = brick.timer / BRICK_CRUMBLE_DURATION;
-      const frameIndex = Math.min(
-        BRICK_CRUMBLE_FRAMES - 1,
-        Math.floor(progress * BRICK_CRUMBLE_FRAMES),
-      );
+      const rawProgress = brick.timer / BRICK_CRUMBLE_DURATION;
+      // Apply slight ease-in so the animation accelerates as the brick falls apart
+      const progress = rawProgress * rawProgress;
+      const frameIndex = Math.min(frameCount - 1, Math.floor(progress * frameCount));
       const frame = this.crumbleSprites[frameIndex];
       const x = brick.col * tw;
       const y = brick.row * th;
+
       ctx.save();
       ctx.imageSmoothingEnabled = false;
+
+      // Draw the empty floor underneath so the crumble sprites (which have
+      // transparent regions) composite correctly over the floor rather than
+      // over whatever was drawn there during the grid pass.
+      if (this.tileSprites && this.tileSprites.length > TILE_FRAME_EMPTY) {
+        ctx.drawImage(this.tileSprites[TILE_FRAME_EMPTY], x, y, tw, th);
+      }
+
       ctx.drawImage(frame, x, y, tw, th);
       ctx.restore();
     }
