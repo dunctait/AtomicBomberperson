@@ -4,7 +4,7 @@ import { StateMachine } from './engine/state-machine';
 import { createTitleScreen } from './screens/title-screen';
 import { createMainMenu } from './screens/main-menu';
 import { createGameSetup } from './screens/game-setup';
-import { createGameplayPlaceholder } from './screens/gameplay-placeholder';
+import { createGameplayScreen } from './screens/gameplay-screen';
 
 async function main() {
   const app = document.createElement('div');
@@ -22,7 +22,7 @@ async function main() {
   sm.register(createTitleScreen(transition));
   sm.register(createMainMenu(transition));
   sm.register(createGameSetup(transition));
-  sm.register(createGameplayPlaceholder(transition));
+  sm.register(createGameplayScreen(transition));
 
   sm.start('title-screen');
 }

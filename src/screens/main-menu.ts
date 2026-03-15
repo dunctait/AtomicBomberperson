@@ -1,4 +1,5 @@
 import type { GameState } from '../engine/state-machine';
+import { assets } from '../assets/asset-registry';
 
 const MENU_ITEMS = ['START GAME', 'OPTIONS', 'ABOUT', 'EXIT'] as const;
 
@@ -69,6 +70,18 @@ export function createMainMenu(
 
       wrapper.appendChild(list);
       container.appendChild(wrapper);
+
+      // Try to load MAINMENU.PCX as the background image
+      assets.getImage('MAINMENU.PCX').then((canvas) => {
+        if (!wrapper.isConnected) return;
+
+        const dataURL = canvas.toDataURL();
+        wrapper.style.backgroundImage = `url(${dataURL})`;
+        wrapper.style.backgroundSize = 'cover';
+        wrapper.style.backgroundPosition = 'center';
+      }).catch(() => {
+        // Asset not available — keep the CSS-only menu
+      });
     },
 
     onExit() {

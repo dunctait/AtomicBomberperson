@@ -597,6 +597,43 @@ html, body {
   animation: blink 1.5s steps(2, start) infinite;
 }
 
+/* ===== GAMEPLAY SCREEN ===== */
+
+.gameplay-screen {
+  gap: 1rem;
+  background: #0d0d1a;
+}
+
+.gameplay-canvas {
+  display: block;
+  border: 2px solid #333;
+  image-rendering: pixelated;
+}
+
+.gameplay-loading {
+  font-size: 0.7rem;
+  color: #53d8fb;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.gameplay-hud {
+  display: flex;
+  justify-content: space-between;
+  width: 600px;
+  max-width: 100%;
+  padding: 0.4rem 0;
+}
+
+.gameplay-map-name {
+  font-size: 0.5rem;
+  color: #53d8fb;
+}
+
+.gameplay-controls {
+  font-size: 0.45rem;
+  color: #4a4a6e;
+}
+
 /* ===== CANVAS (kept for future game use) ===== */
 
 canvas {

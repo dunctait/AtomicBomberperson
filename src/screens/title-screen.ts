@@ -1,4 +1,5 @@
 import type { GameState } from '../engine/state-machine';
+import { assets } from '../assets/asset-registry';
 
 export function createTitleScreen(
   onTransition: (state: string) => void,
@@ -21,6 +22,19 @@ export function createTitleScreen(
       wrapper.appendChild(subtitle);
 
       container.appendChild(wrapper);
+
+      // Try to load TITLE.PCX as the background image
+      assets.getImage('TITLE.PCX').then((canvas) => {
+        // Only apply if this screen is still mounted
+        if (!wrapper.isConnected) return;
+
+        const dataURL = canvas.toDataURL();
+        wrapper.style.backgroundImage = `url(${dataURL})`;
+        wrapper.style.backgroundSize = 'cover';
+        wrapper.style.backgroundPosition = 'center';
+      }).catch(() => {
+        // Asset not available — keep the CSS-only title screen
+      });
     },
 
     onExit() {
