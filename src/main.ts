@@ -1,34 +1,30 @@
 import './style.css';
 import { showAssetLoaderScreen } from './ui/asset-loader-screen';
+import { StateMachine } from './engine/state-machine';
+import { createTitleScreen } from './screens/title-screen';
+import { createMainMenu } from './screens/main-menu';
+import { createGameSetup } from './screens/game-setup';
+import { createGameplayPlaceholder } from './screens/gameplay-placeholder';
 
 async function main() {
   const app = document.createElement('div');
   app.id = 'app';
   document.body.appendChild(app);
 
-  const result = await showAssetLoaderScreen(app);
+  await showAssetLoaderScreen(app);
 
-  // Transition to placeholder "game loading" screen
+  // Assets are ready -- set up the state machine
   app.innerHTML = '';
-  const msg = document.createElement('div');
-  msg.className = 'loading-placeholder';
 
-  if (result === 'cached') {
-    msg.innerHTML =
-      '<h1 class="loader-title">ATOMIC BOMBERPERSON</h1>' +
-      '<p class="loader-subtitle">Assets loaded from cache. Game loading...</p>';
-  } else {
-    msg.innerHTML =
-      '<h1 class="loader-title">ATOMIC BOMBERPERSON</h1>' +
-      `<p class="loader-subtitle">${result.fileCount} files extracted (${formatBytes(result.totalSize)}). Game loading...</p>`;
-  }
-  app.appendChild(msg);
-}
+  const sm = new StateMachine(app);
+  const transition = (state: string) => sm.transition(state);
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  sm.register(createTitleScreen(transition));
+  sm.register(createMainMenu(transition));
+  sm.register(createGameSetup(transition));
+  sm.register(createGameplayPlaceholder(transition));
+
+  sm.start('title-screen');
 }
 
 main();

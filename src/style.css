@@ -275,6 +275,328 @@ html, body {
   50% { opacity: 0.6; }
 }
 
+/* ===== SHARED SCREEN LAYOUT ===== */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  gap: 1.5rem;
+  user-select: none;
+}
+
+/* ===== TITLE SCREEN ===== */
+
+.title-screen {
+  background: radial-gradient(ellipse at center, #1a1a2e 0%, #0d0d1a 100%);
+}
+
+.title-glow {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(1.2rem, 3vw, 2.4rem);
+  color: #e94560;
+  text-align: center;
+  letter-spacing: 0.1em;
+  animation: title-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes title-pulse {
+  0%, 100% {
+    text-shadow:
+      0 0 8px #e94560,
+      0 0 20px #e9456088;
+  }
+  50% {
+    text-shadow:
+      0 0 16px #e94560,
+      0 0 40px #e94560aa,
+      0 0 60px #e9456066;
+  }
+}
+
+.title-prompt {
+  font-size: clamp(0.5rem, 1.1vw, 0.7rem);
+  color: #53d8fb;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ===== MAIN MENU ===== */
+
+.menu-screen {
+  gap: 2.5rem;
+}
+
+.menu-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(1rem, 2.5vw, 1.8rem);
+  color: #e94560;
+  text-shadow: 0 0 8px #e94560, 0 0 20px #e9456088;
+  text-align: center;
+  letter-spacing: 0.1em;
+}
+
+.menu-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font-size: clamp(0.6rem, 1.3vw, 0.85rem);
+  color: #6a6a8e;
+  cursor: pointer;
+  transition: color 0.15s, text-shadow 0.15s;
+  padding: 0.3rem 0;
+}
+
+.menu-item:hover {
+  color: #a0a0c0;
+}
+
+.menu-item--selected {
+  color: #53d8fb;
+  text-shadow: 0 0 6px #53d8fb66;
+}
+
+.menu-cursor {
+  display: inline-block;
+  width: 1em;
+  opacity: 0;
+  transition: opacity 0.1s;
+  animation: cursor-bounce 0.6s ease-in-out infinite;
+}
+
+.menu-item--selected .menu-cursor {
+  opacity: 1;
+}
+
+@keyframes cursor-bounce {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(4px); }
+}
+
+.menu-toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.55rem;
+  color: #e0e0e0;
+  background: #0f3460;
+  border: 1px solid #53d8fb44;
+  border-radius: 4px;
+  padding: 0.6rem 1.2rem;
+  animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ===== GAME SETUP ===== */
+
+.setup-screen {
+  gap: 1.2rem;
+}
+
+.setup-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(0.8rem, 2vw, 1.4rem);
+  color: #e94560;
+  text-shadow: 0 0 6px #e9456088;
+  margin-bottom: 0.5rem;
+}
+
+.setup-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: clamp(0.5rem, 1vw, 0.7rem);
+}
+
+.setup-label {
+  color: #7a7a9e;
+  min-width: 7em;
+  text-align: right;
+}
+
+.setup-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.setup-value {
+  color: #53d8fb;
+  min-width: 2em;
+  text-align: center;
+}
+
+.setup-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.55rem;
+  background: #16213e;
+  color: #53d8fb;
+  border: 1px solid #0f3460;
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.setup-btn:hover:not(:disabled) {
+  background: #1a4a7a;
+  border-color: #53d8fb;
+}
+
+.setup-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.setup-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  max-width: 500px;
+  justify-content: center;
+}
+
+.setup-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.5rem;
+}
+
+.setup-slot-label {
+  color: #7a7a9e;
+  min-width: 2.5em;
+  text-align: right;
+}
+
+.setup-slot-type {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.45rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid #0f3460;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  min-width: 5em;
+  text-align: center;
+}
+
+.setup-slot-type--human {
+  background: #0f3460;
+  color: #53d8fb;
+}
+
+.setup-slot-type--ai {
+  background: #2a1a3e;
+  color: #c77dff;
+}
+
+.setup-slot-type--off {
+  background: #1a1a2e;
+  color: #4a4a6e;
+}
+
+.setup-slot-type:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.setup-btn-row {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.setup-start-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.7rem;
+  padding: 0.7rem 1.8rem;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.setup-start-btn:hover {
+  background: #ff5a78;
+  box-shadow: 0 0 16px #e9456066;
+}
+
+.setup-back-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.6rem;
+  padding: 0.7rem 1.2rem;
+  background: transparent;
+  color: #7a7a9e;
+  border: 1px solid #4a4a6e;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.setup-back-btn:hover {
+  color: #e0e0e0;
+  border-color: #7a7a9e;
+}
+
+.setup-hint {
+  font-size: 0.45rem;
+  color: #4a4a6e;
+}
+
+/* ===== GAMEPLAY PLACEHOLDER ===== */
+
+.gameplay-placeholder-screen {
+  gap: 2rem;
+}
+
+.gameplay-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(0.9rem, 2vw, 1.5rem);
+  color: #53d8fb;
+  text-shadow: 0 0 8px #53d8fb88;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.gameplay-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: clamp(0.45rem, 1vw, 0.6rem);
+  color: #a0a0c0;
+  text-align: center;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 1rem 2rem;
+}
+
+.gameplay-hint {
+  font-size: 0.45rem;
+  color: #4a4a6e;
+  animation: blink 1.5s steps(2, start) infinite;
+}
+
 /* ===== CANVAS (kept for future game use) ===== */
 
 canvas {
