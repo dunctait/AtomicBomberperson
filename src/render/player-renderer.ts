@@ -65,12 +65,11 @@ export class PlayerRenderer {
     const radius = Math.min(tileW, tileH) * 0.35;
     const color = PLAYER_COLORS[player.index] || '#FFF';
 
-    // Only attempt imported sprites if they loaded with valid frames
+    // Only attempt imported sprites if they loaded with valid, non-empty frames
     try {
       if (this.importedSprites &&
           this.importedSprites.stand.frames.length >= 4 &&
-          this.importedSprites.stand.frames[0].width > 0 &&
-          this.importedSprites.stand.frames[0].height > 0 &&
+          this.hasVisiblePixels(this.importedSprites.stand.frames[0]) &&
           this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
         return;
       }
@@ -327,6 +326,31 @@ export class PlayerRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(index + 1), cx, cy + radius * 0.35);
+  }
+
+  /** Check if an HTMLCanvasElement has any non-transparent pixels. Cached per canvas. */
+  private visibleCache = new WeakMap<HTMLCanvasElement, boolean>();
+  private hasVisiblePixels(canvas: HTMLCanvasElement): boolean {
+    if (this.visibleCache.has(canvas)) return this.visibleCache.get(canvas)!;
+    try {
+      if (canvas.width === 0 || canvas.height === 0) {
+        this.visibleCache.set(canvas, false);
+        return false;
+      }
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { this.visibleCache.set(canvas, false); return false; }
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 0) {
+          this.visibleCache.set(canvas, true);
+          return true;
+        }
+      }
+    } catch {
+      // Cross-origin or other error
+    }
+    this.visibleCache.set(canvas, false);
+    return false;
   }
 
   private renderDeadEyes(

@@ -31,14 +31,20 @@ function readASCII(view: DataView, offset: number, length: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Pixel decoding (16-bit ARGB-1555 -> RGBA)
+// Pixel decoding (RGB-555 with keycolor transparency -> RGBA)
 // ---------------------------------------------------------------------------
 
-function decodePixel(low: number, high: number): [number, number, number, number] {
+function decodePixel(
+  low: number,
+  high: number,
+  keyLow: number,
+  keyHigh: number,
+): [number, number, number, number] {
   const r = (high & 0x7c) << 1;
   const g = ((high & 0x03) << 6) | ((low & 0xe0) >> 2);
   const b = (low & 0x1f) << 3;
-  const a = (high & 0x80) ? 255 : 0;
+  // Transparency is determined by keycolor matching, not alpha bit
+  const a = (low === keyLow && high === keyHigh) ? 0 : 255;
   return [r, g, b, a];
 }
 
@@ -51,6 +57,8 @@ function decompressRLE(
   offset: number,
   compressedSize: number,
   totalPixels: number,
+  keyLow: number,
+  keyHigh: number,
 ): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(totalPixels * 4);
   let pixelIndex = 0;
@@ -67,7 +75,7 @@ function decompressRLE(
     if (packetHeader & 0x80) {
       // RLE packet — repeat pixel (packetHeader & 0x7F) + 1 times
       const count = (packetHeader & 0x7f) + 1;
-      const [r, g, b, a] = decodePixel(low, high);
+      const [r, g, b, a] = decodePixel(low, high, keyLow, keyHigh);
       for (let i = 0; i < count && pixelIndex < totalPixels; i++) {
         const base = pixelIndex * 4;
         pixels[base] = r;
@@ -79,7 +87,7 @@ function decompressRLE(
     } else {
       // Raw packet — first pixel, then (packetHeader & 0x7F) more pixels
       const additional = packetHeader & 0x7f;
-      const [r, g, b, a] = decodePixel(low, high);
+      const [r, g, b, a] = decodePixel(low, high, keyLow, keyHigh);
       const base = pixelIndex * 4;
       pixels[base] = r;
       pixels[base + 1] = g;
@@ -91,7 +99,7 @@ function decompressRLE(
         const lo = view.getUint8(offset);
         const hi = view.getUint8(offset + 1);
         offset += 2;
-        const [pr, pg, pb, pa] = decodePixel(lo, hi);
+        const [pr, pg, pb, pa] = decodePixel(lo, hi, keyLow, keyHigh);
         const b2 = pixelIndex * 4;
         pixels[b2] = pr;
         pixels[b2 + 1] = pg;
@@ -139,8 +147,9 @@ function parseCIMG(view: DataView, offset: number): CIMGData {
   offset += 2;
   const hotspotY = view.getUint16(offset, true);
   offset += 2;
-  // const keycolorBytes = view.getUint16(offset, true);
-  offset += 2; // keycolorBytes
+  const keycolorLow = view.getUint8(offset);
+  const keycolorHigh = view.getUint8(offset + 1);
+  offset += 2; // keycolor
   offset += 2; // unknown
 
   // Skip palette data
@@ -158,7 +167,7 @@ function parseCIMG(view: DataView, offset: number): CIMGData {
   const compressedSize = compressedSizePlus12 - 12;
   const totalPixels = width * height;
 
-  const pixels = decompressRLE(view, offset, compressedSize, totalPixels);
+  const pixels = decompressRLE(view, offset, compressedSize, totalPixels, keycolorLow, keycolorHigh);
 
   return { width, height, hotspotX, hotspotY, pixels };
 }

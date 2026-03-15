@@ -61,7 +61,7 @@ export class GameGrid {
     this.clearSpawnAreas(scheme.spawns);
   }
 
-  /** Clear spaces around spawn points (3x3 area must be empty) */
+  /** Clear spaces around spawn points (3x3 area must be empty for hitbox clearance) */
   clearSpawnAreas(spawns: SpawnPoint[]): void {
     this.spawnClearedBrickCount = 0;
     for (const spawn of spawns) {
@@ -71,17 +71,16 @@ export class GameGrid {
           const c = spawn.x + dc;
           if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS) {
             const cell = this.cells[r][c];
-            // Only clear bricks, not solid walls
-            if (cell.type === CellContent.Brick) {
+            // Clear both bricks and solid walls — the player hitbox extends
+            // into adjacent cells, so all 8 neighbors must be walkable.
+            if (cell.type === CellContent.Brick || cell.type === CellContent.Solid) {
+              if (cell.type === CellContent.Brick) {
+                this.spawnClearedBrickCount += 1;
+              }
               cell.type = CellContent.Empty;
-              this.spawnClearedBrickCount += 1;
             }
           }
         }
-      }
-      // Always ensure the spawn cell itself is empty
-      if (spawn.y >= 0 && spawn.y < GRID_ROWS && spawn.x >= 0 && spawn.x < GRID_COLS) {
-        this.cells[spawn.y][spawn.x].type = CellContent.Empty;
       }
     }
   }
