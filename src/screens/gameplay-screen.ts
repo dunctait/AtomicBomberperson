@@ -1,6 +1,6 @@
 import type { GameState } from '../engine/state-machine';
 import { gameConfig } from './game-config';
-import { GameGrid } from '../engine/game-grid';
+import { CellContent, GameGrid } from '../engine/game-grid';
 import { GridRenderer } from '../render/grid-renderer';
 import { PlayerRenderer, PLAYER_COLORS } from '../render/player-renderer';
 import { Player } from '../engine/player';
@@ -10,29 +10,128 @@ import { BombRenderer } from '../render/bomb-renderer';
 import { PowerupManager, applyPowerup } from '../engine/powerup';
 import { PowerupRenderer } from '../render/powerup-renderer';
 import { AIBot } from '../engine/ai-bot';
-import { parseScheme, type ParsedScheme } from '../assets/parsers/sch-parser';
+import { parseScheme, TileType, type ParsedScheme } from '../assets/parsers/sch-parser';
 import { getAllFileNames } from '../assets/asset-db';
 import { getFile } from '../assets/asset-db';
 
-/** Find and load a .SCH scheme file from IndexedDB */
-async function loadScheme(mapName: string): Promise<ParsedScheme> {
+interface GameplayMapMeta {
+  name: string;
+  source: string;
+  loadingLabel: string;
+}
+
+interface GameplaySchemeSummary {
+  detailLabel: string;
+  templateLabel: string;
+  layoutLabel: string;
+  spawnLabel: string;
+  inventoryLabel: string;
+}
+
+interface GameplayHudElements {
+  root: HTMLDivElement;
+  mapName: HTMLSpanElement;
+  mapSource: HTMLSpanElement;
+  schemeSummary: HTMLSpanElement;
+  templateSummary: HTMLSpanElement;
+  layoutSummary: HTMLSpanElement;
+  spawnSummary: HTMLSpanElement;
+  inventorySummary: HTMLSpanElement;
+}
+
+type GameplayHudSummaryKey =
+  | 'schemeSummary'
+  | 'templateSummary'
+  | 'layoutSummary'
+  | 'spawnSummary'
+  | 'inventorySummary';
+
+type GameplayHudSummaryDefinition = {
+  key: GameplayHudSummaryKey;
+  className: string;
+};
+
+const GAMEPLAY_HUD_SUMMARY_DEFINITIONS: GameplayHudSummaryDefinition[] = [
+  { key: 'schemeSummary', className: 'gameplay-scheme-summary' },
+  { key: 'templateSummary', className: 'gameplay-template-summary' },
+  { key: 'layoutSummary', className: 'gameplay-layout-summary' },
+  { key: 'spawnSummary', className: 'gameplay-spawn-summary' },
+  { key: 'inventorySummary', className: 'gameplay-inventory-summary' },
+];
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+export function getGameplayMapMeta(
+  selectedMapName: string,
+  selectedMapFile: string | null,
+  schemeName?: string,
+  usedFallback = false,
+): GameplayMapMeta {
+  const resolvedName = (schemeName && schemeName.trim()) || selectedMapName;
+
+  if (usedFallback) {
+    return {
+      name: resolvedName,
+      source: 'AUTO FALLBACK SCHEME',
+      loadingLabel: `Loading fallback map ${resolvedName}...`,
+    };
+  }
+
+  if (selectedMapFile) {
+    return {
+      name: resolvedName,
+      source: `IMPORTED ${basename(selectedMapFile).toUpperCase()}`,
+      loadingLabel: `Loading imported map ${selectedMapName}...`,
+    };
+  }
+
+  return {
+    name: resolvedName,
+    source: 'DEFAULT SCHEME',
+    loadingLabel: `Loading map ${selectedMapName}...`,
+  };
+}
+
+/** Resolve the selected .SCH file from IndexedDB using the explicit setup selection first. */
+export async function resolveSchemeFile(
+  mapName: string,
+  selectedFile: string | null,
+): Promise<string> {
   const allFiles = await getAllFileNames();
 
-  // Try to find the exact map name (case-insensitive)
-  const target = mapName.toUpperCase();
-  let schFile = allFiles.find((f) => {
-    const upper = f.toUpperCase();
-    return upper.endsWith(`/${target}.SCH`) || upper.endsWith(`\\${target}.SCH`) || upper === `${target}.SCH`;
-  });
-
-  // Fallback: find any .SCH file
-  if (!schFile) {
-    schFile = allFiles.find((f) => f.toUpperCase().endsWith('.SCH'));
+  if (selectedFile) {
+    const exactFile = allFiles.find(
+      (file) => file.toUpperCase() === selectedFile.toUpperCase(),
+    );
+    if (exactFile) {
+      return exactFile;
+    }
   }
+
+  const target = mapName.toUpperCase();
+  const schFile =
+    allFiles.find((file) => {
+      const upper = file.toUpperCase();
+      return (
+        upper.endsWith(`/${target}.SCH`) ||
+        upper.endsWith(`\\${target}.SCH`) ||
+        upper === `${target}.SCH`
+      );
+    }) ??
+    allFiles.find((file) => file.toUpperCase().endsWith('.SCH'));
 
   if (!schFile) {
     throw new Error('No .SCH scheme file found in assets');
   }
+
+  return schFile;
+}
+
+/** Find and load a .SCH scheme file from IndexedDB */
+async function loadScheme(mapName: string, selectedFile: string | null): Promise<ParsedScheme> {
+  const schFile = await resolveSchemeFile(mapName, selectedFile);
 
   const buffer = await getFile(schFile);
   if (!buffer) {
@@ -77,6 +176,156 @@ function createFallbackScheme(): ParsedScheme {
   };
 }
 
+function countGeneratedBricks(gameGrid: GameGrid): number {
+  let brickCount = 0;
+  for (const row of gameGrid.cells) {
+    for (const cell of row) {
+      if (cell.type === CellContent.Brick) {
+        brickCount += 1;
+      }
+    }
+  }
+  return brickCount;
+}
+
+function countSchemeTiles(scheme: ParsedScheme): { open: number; solid: number; brick: number } {
+  let open = 0;
+  let solid = 0;
+  let brick = 0;
+
+  for (const row of scheme.grid) {
+    for (const tile of row) {
+      if (tile === TileType.Solid) {
+        solid += 1;
+      } else if (tile === TileType.Brick) {
+        brick += 1;
+      } else {
+        open += 1;
+      }
+    }
+  }
+
+  return { open, solid, brick };
+}
+
+function getSpawnForPlayerSlot(
+  activeScheme: ParsedScheme,
+  slotIndex: number,
+): ParsedScheme['spawns'][number] | null {
+  return (
+    activeScheme.spawns.find((spawn) => spawn.player === slotIndex) ??
+    activeScheme.spawns[slotIndex] ??
+    null
+  );
+}
+
+function getGameplaySpawnSummary(activePlayers: Player[], activeScheme: ParsedScheme): string {
+  return activePlayers
+    .map((player) => {
+      const spawn = getSpawnForPlayerSlot(activeScheme, player.index);
+      const x = spawn?.x ?? 1;
+      const y = spawn?.y ?? 1;
+      const teamSuffix = spawn ? ` T${spawn.team + 1}` : '';
+      return `P${player.index + 1} @ ${x},${y}${teamSuffix}`;
+    })
+    .join(' | ');
+}
+
+function formatNamedList(
+  label: string,
+  entries: Array<{ name: string; value: number }>,
+  entryFormatter: (entry: { name: string; value: number }) => string,
+): string {
+  if (entries.length === 0) {
+    return `${label} NONE`;
+  }
+
+  return `${label} ${entries.map(entryFormatter).join(', ')}`;
+}
+
+function formatNamedCountList(
+  label: string,
+  entries: Array<{ name: string; value: number }>,
+): string {
+  return formatNamedList(label, entries, (entry) => `${entry.name.toUpperCase()} x${entry.value}`);
+}
+
+function formatNamedValueList(
+  label: string,
+  entries: Array<{ name: string; value: number }>,
+): string {
+  return formatNamedList(label, entries, (entry) => `${entry.name.toUpperCase()}=${entry.value}`);
+}
+
+function createGameplayHudLine(className: string): HTMLSpanElement {
+  const line = document.createElement('span');
+  line.className = className;
+  return line;
+}
+
+function appendGameplayHudSummaries(
+  container: HTMLElement,
+): Record<GameplayHudSummaryKey, HTMLSpanElement> {
+  const lines = {} as Record<GameplayHudSummaryKey, HTMLSpanElement>;
+
+  for (const definition of GAMEPLAY_HUD_SUMMARY_DEFINITIONS) {
+    const line = createGameplayHudLine(definition.className);
+    container.appendChild(line);
+    lines[definition.key] = line;
+  }
+
+  return lines;
+}
+
+function setGameplayHudSummary(
+  hudElement: HTMLSpanElement,
+  label: string | undefined,
+): void {
+  hudElement.textContent = label ?? '';
+}
+
+function getGameplaySchemeSummary(
+  scheme: ParsedScheme,
+  gameGrid: GameGrid,
+  hiddenPowerupCount: number,
+  activePlayers: Player[],
+): GameplaySchemeSummary {
+  const spawnCount = scheme.spawns.length;
+  const teamCount = new Set(scheme.spawns.map((spawn) => spawn.team)).size;
+  const forbiddenPowerups = scheme.powerups.filter((powerup) => powerup.forbidden).length;
+  const allowedPowerups = scheme.powerups.length - forbiddenPowerups;
+  const schemeTiles = countSchemeTiles(scheme);
+  const brickCount = countGeneratedBricks(gameGrid);
+  const bornWithPowerups = scheme.powerups
+    .filter((powerup) => powerup.bornWith > 0)
+    .map((powerup) => ({ name: powerup.name, value: powerup.bornWith }));
+  const overridePowerups = scheme.powerups
+    .filter((powerup) => powerup.hasOverride)
+    .map((powerup) => ({ name: powerup.name, value: powerup.overrideValue }));
+
+  const detailParts = [`SPAWNS ${spawnCount}`];
+  if (teamCount > 1) {
+    detailParts.push(`TEAMS ${teamCount}`);
+  }
+
+  if (scheme.powerups.length === 0) {
+    detailParts.push('POWERUPS DEFAULT');
+  } else {
+    detailParts.push(`POWERUPS ${allowedPowerups} ON / ${forbiddenPowerups} OFF`);
+  }
+
+  return {
+    detailLabel: detailParts.join(' | '),
+    templateLabel: `BASE OPEN ${schemeTiles.open} | SOLID ${schemeTiles.solid} | PRESET BRICKS ${schemeTiles.brick}`,
+    layoutLabel: `BRICKS ${brickCount} | TARGET ${scheme.brickDensity}% | CLEARED ${gameGrid.spawnClearedBrickCount} | HIDDEN POWERUPS ${hiddenPowerupCount}`,
+    spawnLabel: getGameplaySpawnSummary(activePlayers, scheme),
+    inventoryLabel: [
+      formatNamedCountList('START WITH', bornWithPowerups),
+      formatNamedValueList('OVERRIDES', overridePowerups),
+    ].join(' | '),
+  };
+}
+
 export function createGameplayScreen(
   onTransition: (state: string) => void,
 ): GameState {
@@ -94,6 +343,7 @@ export function createGameplayScreen(
   let scheme: ParsedScheme;
   let initialized = false;
   let elapsedTime = 0;
+  let currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile);
 
   // Win condition state
   let gameOver = false;
@@ -103,6 +353,7 @@ export function createGameplayScreen(
 
   // HUD element reference
   let hudStatsEl: HTMLDivElement | null = null;
+  let gameplayHud: GameplayHudElements | null = null;
 
   function initPlayers(): void {
     players = [];
@@ -110,7 +361,7 @@ export function createGameplayScreen(
     const configPlayers = gameConfig.players.filter((p) => p.type !== 'off');
 
     for (let i = 0; i < configPlayers.length; i++) {
-      const spawn = scheme.spawns[i];
+      const spawn = getSpawnForPlayerSlot(scheme, i);
       const spawnX = spawn ? spawn.x : 1;
       const spawnY = spawn ? spawn.y : 1;
       const player = new Player(i, configPlayers[i].type, spawnX, spawnY);
@@ -148,7 +399,7 @@ export function createGameplayScreen(
 
     // Draw players
     for (const p of players) {
-      playerRenderer.renderPlayer(ctx, p, gridRenderer.tileWidth, gridRenderer.tileHeight);
+      playerRenderer.renderPlayer(ctx, p, gridRenderer.tileWidth, gridRenderer.tileHeight, elapsedTime);
     }
 
     // Draw game over overlay
@@ -183,10 +434,7 @@ export function createGameplayScreen(
     for (const p of players) {
       if (!p.alive || !p.inputBomb) continue;
 
-      // Count active bombs for this player
-      p.stats.activeBombs = bombManager.bombs.filter(
-        (b) => !b.exploded && b.owner === p.index,
-      ).length;
+      recountActiveBombsForPlayer(p);
 
       if (p.stats.activeBombs >= p.stats.maxBombs) continue;
 
@@ -198,6 +446,18 @@ export function createGameplayScreen(
 
       // Clear the bomb input so it only fires once per press
       p.inputBomb = false;
+    }
+  }
+
+  function recountActiveBombsForPlayer(player: Player): void {
+    player.stats.activeBombs = bombManager.bombs.filter(
+      (bomb) => !bomb.exploded && bomb.owner === player.index,
+    ).length;
+  }
+
+  function updateAllActiveBombCounts(): void {
+    for (const player of players) {
+      recountActiveBombsForPlayer(player);
     }
   }
 
@@ -261,17 +521,96 @@ export function createGameplayScreen(
     hudStatsEl.innerHTML = html;
   }
 
+  function createGameplayHud(): GameplayHudElements {
+    const root = document.createElement('div');
+    root.className = 'gameplay-hud hidden';
+
+    const mapMeta = document.createElement('div');
+    mapMeta.className = 'gameplay-map-meta';
+
+    const mapName = document.createElement('span');
+    mapName.className = 'gameplay-map-name';
+    mapMeta.appendChild(mapName);
+
+    const mapSource = document.createElement('span');
+    mapSource.className = 'gameplay-map-source';
+    mapMeta.appendChild(mapSource);
+
+    const hudSummaries = appendGameplayHudSummaries(mapMeta);
+
+    const controls = document.createElement('span');
+    controls.className = 'gameplay-controls';
+    controls.textContent = 'Arrow keys to move | SPACE to bomb | ESC to quit';
+
+    root.append(mapMeta, controls);
+    return { root, mapName, mapSource, ...hudSummaries };
+  }
+
+  function initializeGameplaySystems(activeScheme: ParsedScheme): GameplaySchemeSummary {
+    scheme = activeScheme;
+    currentMapMeta = getGameplayMapMeta(
+      gameConfig.map,
+      gameConfig.mapFile,
+      scheme.name,
+      scheme.name === 'FALLBACK',
+    );
+    gameGrid = new GameGrid(scheme);
+
+    gridRenderer = new GridRenderer(canvas);
+    playerRenderer = new PlayerRenderer();
+    bombManager = new BombManager();
+    bombRenderer = new BombRenderer();
+    powerupManager = new PowerupManager();
+    powerupRenderer = new PowerupRenderer();
+    powerupManager.generatePowerups(gameGrid, scheme.powerups);
+
+    initPlayers();
+    initialized = true;
+    elapsedTime = 0;
+
+    return getGameplaySchemeSummary(scheme, gameGrid, powerupManager.powerups.length, players);
+  }
+
+  function revealGameplayUi(loadingMsg: HTMLParagraphElement, schemeSummary: GameplaySchemeSummary): void {
+    loadingMsg.classList.add('hidden');
+    canvas.classList.remove('hidden');
+    gameplayHud?.root.classList.remove('hidden');
+    hudStatsEl?.classList.remove('hidden');
+
+    updateMapHud(schemeSummary);
+    updateHudStats();
+    render();
+  }
+
+  function updateMapHud(schemeSummary?: GameplaySchemeSummary): void {
+    if (!gameplayHud) return;
+    gameplayHud.mapName.textContent = `MAP ${currentMapMeta.name}`;
+    gameplayHud.mapSource.textContent = currentMapMeta.source;
+    const summaryLabels: Record<GameplayHudSummaryKey, string | undefined> = {
+      schemeSummary: schemeSummary?.detailLabel,
+      templateSummary: schemeSummary?.templateLabel,
+      layoutSummary: schemeSummary?.layoutLabel,
+      spawnSummary: schemeSummary?.spawnLabel,
+      inventorySummary: schemeSummary?.inventoryLabel,
+    };
+
+    for (const key of Object.keys(summaryLabels) as GameplayHudSummaryKey[]) {
+      setGameplayHudSummary(gameplayHud[key], summaryLabels[key]);
+    }
+  }
+
   return {
     name: 'gameplay',
 
     onEnter(container: HTMLElement) {
+      currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile);
       const wrapper = document.createElement('div');
       wrapper.className = 'screen gameplay-screen';
 
       // Loading message while we fetch the scheme
       const loadingMsg = document.createElement('p');
       loadingMsg.className = 'gameplay-loading';
-      loadingMsg.textContent = 'Loading map...';
+      loadingMsg.textContent = currentMapMeta.loadingLabel;
       wrapper.appendChild(loadingMsg);
 
       canvas = document.createElement('canvas');
@@ -283,10 +622,8 @@ export function createGameplayScreen(
       hudStatsEl.className = 'gameplay-player-hud hidden';
       wrapper.appendChild(hudStatsEl);
 
-      const hud = document.createElement('div');
-      hud.className = 'gameplay-hud hidden';
-      hud.innerHTML = '<span class="gameplay-map-name"></span><span class="gameplay-controls">Arrow keys to move | SPACE to bomb | ESC to quit</span>';
-      wrapper.appendChild(hud);
+      gameplayHud = createGameplayHud();
+      wrapper.appendChild(gameplayHud.root);
 
       container.appendChild(wrapper);
 
@@ -296,49 +633,22 @@ export function createGameplayScreen(
       gameOverMessage = '';
 
       // Load scheme asynchronously
-      loadScheme(gameConfig.map)
+      loadScheme(gameConfig.map, gameConfig.mapFile)
         .catch(() => {
           console.warn('No .SCH file found, using fallback scheme');
+          currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile, 'FALLBACK', true);
           return createFallbackScheme();
         })
         .then((loadedScheme) => {
-          scheme = loadedScheme;
-          gameGrid = new GameGrid(scheme);
-
-          gridRenderer = new GridRenderer(canvas);
-          playerRenderer = new PlayerRenderer();
-          bombManager = new BombManager();
-          bombRenderer = new BombRenderer();
-
-          // Initialize powerup system
-          powerupManager = new PowerupManager();
-          powerupRenderer = new PowerupRenderer();
-          powerupManager.generatePowerups(gameGrid, scheme.powerups);
-
-          initPlayers();
-          initialized = true;
-          elapsedTime = 0;
-
-          // Show canvas, hide loading
-          loadingMsg.classList.add('hidden');
-          canvas.classList.remove('hidden');
-          hud.classList.remove('hidden');
-          if (hudStatsEl) hudStatsEl.classList.remove('hidden');
-
-          // Set map name in HUD
-          const mapNameEl = hud.querySelector('.gameplay-map-name');
-          if (mapNameEl) {
-            mapNameEl.textContent = scheme.name || gameConfig.map;
-          }
-
-          updateHudStats();
-          render();
+          const schemeSummary = initializeGameplaySystems(loadedScheme);
+          revealGameplayUi(loadingMsg, schemeSummary);
         });
     },
 
     onExit() {
       initialized = false;
       hudStatsEl = null;
+      gameplayHud = null;
     },
 
     onUpdate(dt: number) {
@@ -393,11 +703,7 @@ export function createGameplayScreen(
       checkPowerupPickups();
 
       // Update active bomb counts per player
-      for (const p of players) {
-        p.stats.activeBombs = bombManager.bombs.filter(
-          (b) => !b.exploded && b.owner === p.index,
-        ).length;
-      }
+      updateAllActiveBombCounts();
 
       // Check win condition
       checkWinCondition();

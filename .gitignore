@@ -5,3 +5,9 @@ references/
 CLAUDE.md
 *.log
 .DS_Store
+AGENTS.md
+task-delivery.md
+.codex/
+local-runner/
+test-results/
+.npm-cache/

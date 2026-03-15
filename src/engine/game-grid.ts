@@ -18,10 +18,12 @@ export interface Cell {
 
 export class GameGrid {
   cells: Cell[][];  // [row][col]
+  spawnClearedBrickCount: number;
 
   constructor(scheme: ParsedScheme) {
     // Initialize all cells to empty
     this.cells = [];
+    this.spawnClearedBrickCount = 0;
     for (let r = 0; r < GRID_ROWS; r++) {
       this.cells.push([]);
       for (let c = 0; c < GRID_COLS; c++) {
@@ -61,6 +63,7 @@ export class GameGrid {
 
   /** Clear spaces around spawn points (3x3 area must be empty) */
   clearSpawnAreas(spawns: SpawnPoint[]): void {
+    this.spawnClearedBrickCount = 0;
     for (const spawn of spawns) {
       for (let dr = -1; dr <= 1; dr++) {
         for (let dc = -1; dc <= 1; dc++) {
@@ -71,6 +74,7 @@ export class GameGrid {
             // Only clear bricks, not solid walls
             if (cell.type === CellContent.Brick) {
               cell.type = CellContent.Empty;
+              this.spawnClearedBrickCount += 1;
             }
           }
         }

@@ -22,6 +22,9 @@ export interface AssetSummary {
   extensions: Record<string, number>; // extension -> count
 }
 
+const FETCH_TIMEOUT_MS = 30_000;
+const REQUIRED_GAME_EXTENSIONS = ['.pcx', '.ani', '.sch'];
+
 /** Read a File into an ArrayBuffer. */
 function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
@@ -46,11 +49,43 @@ export async function loadAssets(
   let zipBuffer: ArrayBuffer;
 
   if (source instanceof File) {
+    if (!source.name.toLowerCase().endsWith('.zip')) {
+      throw new Error('Please select a .zip file.');
+    }
     report('Reading uploaded file...', 0);
     zipBuffer = await readFileAsArrayBuffer(source);
   } else {
+    const url = source.trim();
+    if (!url) {
+      throw new Error('Please enter a URL.');
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error('Please enter a valid URL.');
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      throw new Error('Only http:// or https:// URLs are supported.');
+    }
+
     report('Downloading zip from URL...', 0);
-    const response = await fetch(source);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(parsedUrl.toString(), { signal: controller.signal });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error(`Download timed out after ${FETCH_TIMEOUT_MS / 1000} seconds.`);
+      }
+      throw new Error('Failed to download zip from URL.');
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if (!response.ok) {
       throw new Error(`Download failed: ${response.status} ${response.statusText}`);
     }
@@ -73,6 +108,16 @@ export async function loadAssets(
   const totalFiles = entries.length;
   if (totalFiles === 0) {
     throw new Error('The zip archive contains no files.');
+  }
+
+  const hasExpectedGameFiles = entries.some(({ name }) => {
+    const lower = name.toLowerCase();
+    return REQUIRED_GAME_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  });
+  if (!hasExpectedGameFiles) {
+    throw new Error(
+      'Zip did not include expected Atomic Bomberman files (.PCX, .ANI, .SCH).',
+    );
   }
 
   report(`Found ${totalFiles} files. Extracting...`, 0.15);

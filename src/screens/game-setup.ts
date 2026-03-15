@@ -1,75 +1,179 @@
 import type { GameState } from '../engine/state-machine';
+import { getAllFileNames } from '../assets/asset-db';
 import {
   gameConfig,
   rebuildSlots,
   resetConfig,
   type PlayerType,
 } from './game-config';
+import { mountVirtualStage, type VirtualStageElements } from '../ui/virtual-stage';
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 10;
+
+interface AvailableMapOption {
+  label: string;
+  file: string | null;
+}
 
 export function createGameSetup(
   onTransition: (state: string) => void,
 ): GameState {
   let wrapper: HTMLElement | null = null;
+  let stageElements: VirtualStageElements | null = null;
+  let availableMaps: AvailableMapOption[] = [{ label: gameConfig.map, file: gameConfig.mapFile }];
+  let mapListRequestId = 0;
+
+  function createStepperButton(
+    text: string,
+    className: string,
+    disabled: boolean,
+    onClick: () => void,
+  ): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = className;
+    button.textContent = text;
+    button.disabled = disabled;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function createSetupStepperRow(options: {
+    label: string;
+    value: string;
+    valueClassName?: string;
+    previousButtonClassName?: string;
+    nextButtonClassName?: string;
+    previousDisabled: boolean;
+    nextDisabled: boolean;
+    onPrevious: () => void;
+    onNext: () => void;
+  }): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'setup-row';
+
+    const label = document.createElement('span');
+    label.className = 'setup-label';
+    label.textContent = options.label;
+    row.appendChild(label);
+
+    const controls = document.createElement('div');
+    controls.className = 'setup-controls';
+    controls.appendChild(
+      createStepperButton(
+        '\u25C0',
+        options.previousButtonClassName ?? 'setup-btn',
+        options.previousDisabled,
+        options.onPrevious,
+      ),
+    );
+
+    const value = document.createElement('span');
+    value.className = options.valueClassName ?? 'setup-value';
+    value.textContent = options.value;
+    controls.appendChild(value);
+
+    controls.appendChild(
+      createStepperButton(
+        '\u25B6',
+        options.nextButtonClassName ?? 'setup-btn',
+        options.nextDisabled,
+        options.onNext,
+      ),
+    );
+
+    row.appendChild(controls);
+    return row;
+  }
+
+  function setSelectedMap(nextMap: AvailableMapOption): void {
+    gameConfig.map = nextMap.label;
+    gameConfig.mapFile = nextMap.file;
+  }
+
+  function cycleMap(direction: -1 | 1, container: HTMLElement): void {
+    if (availableMaps.length <= 1) return;
+    const currentIndex = availableMaps.findIndex(
+      (map) => map.file === gameConfig.mapFile && map.label === gameConfig.map,
+    );
+    const startIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex =
+      (startIndex + direction + availableMaps.length) % availableMaps.length;
+    setSelectedMap(availableMaps[nextIndex]);
+    render(container);
+  }
+
+  async function loadAvailableMaps(container: HTMLElement): Promise<void> {
+    const requestId = ++mapListRequestId;
+
+    try {
+      const allFiles = await getAllFileNames();
+      const nextMaps = Array.from(
+        new Map(
+          allFiles
+            .filter((file) => file.toUpperCase().endsWith('.SCH'))
+            .map((file) => {
+              const baseName = file.split(/[\\/]/).pop() ?? file;
+              const label = baseName.replace(/\.sch$/i, '').toUpperCase();
+              return [file.toUpperCase(), { label, file }];
+            }),
+        ).values(),
+      ).sort((a, b) => a.label.localeCompare(b.label) || (a.file ?? '').localeCompare(b.file ?? ''));
+
+      if (!wrapper || requestId !== mapListRequestId) return;
+
+      availableMaps = nextMaps.length > 0 ? nextMaps : [{ label: 'BASIC', file: null }];
+      if (!availableMaps.some((map) => map.file === gameConfig.mapFile && map.label === gameConfig.map)) {
+        setSelectedMap(availableMaps[0]);
+      }
+      render(container);
+    } catch {
+      if (!wrapper || requestId !== mapListRequestId) return;
+      availableMaps = [{ label: 'BASIC', file: null }];
+      setSelectedMap(availableMaps[0]);
+      render(container);
+    }
+  }
 
   function render(container: HTMLElement) {
-    if (wrapper) wrapper.remove();
+    wrapper?.remove();
+
+    if (!stageElements) {
+      stageElements = mountVirtualStage(container, 'setup-screen');
+    }
+
+    const { content } = stageElements;
 
     wrapper = document.createElement('div');
-    wrapper.className = 'screen setup-screen';
+    wrapper.className = 'setup-panel';
 
     const title = document.createElement('h2');
     title.className = 'setup-title';
     title.textContent = 'GAME SETUP';
     wrapper.appendChild(title);
 
-    // --- Player count row ---
-    const countRow = document.createElement('div');
-    countRow.className = 'setup-row';
-
-    const countLabel = document.createElement('span');
-    countLabel.className = 'setup-label';
-    countLabel.textContent = 'PLAYERS';
-    countRow.appendChild(countLabel);
-
-    const countControls = document.createElement('div');
-    countControls.className = 'setup-controls';
-
-    const minusBtn = document.createElement('button');
-    minusBtn.className = 'setup-btn';
-    minusBtn.textContent = '\u25C0';
-    minusBtn.disabled = gameConfig.playerCount <= MIN_PLAYERS;
-    minusBtn.addEventListener('click', () => {
-      if (gameConfig.playerCount > MIN_PLAYERS) {
-        gameConfig.playerCount--;
-        rebuildSlots();
-        render(container);
-      }
-    });
-    countControls.appendChild(minusBtn);
-
-    const countVal = document.createElement('span');
-    countVal.className = 'setup-value';
-    countVal.textContent = String(gameConfig.playerCount);
-    countControls.appendChild(countVal);
-
-    const plusBtn = document.createElement('button');
-    plusBtn.className = 'setup-btn';
-    plusBtn.textContent = '\u25B6';
-    plusBtn.disabled = gameConfig.playerCount >= MAX_PLAYERS;
-    plusBtn.addEventListener('click', () => {
-      if (gameConfig.playerCount < MAX_PLAYERS) {
-        gameConfig.playerCount++;
-        rebuildSlots();
-        render(container);
-      }
-    });
-    countControls.appendChild(plusBtn);
-
-    countRow.appendChild(countControls);
-    wrapper.appendChild(countRow);
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'PLAYERS',
+        value: String(gameConfig.playerCount),
+        previousDisabled: gameConfig.playerCount <= MIN_PLAYERS,
+        nextDisabled: gameConfig.playerCount >= MAX_PLAYERS,
+        onPrevious: () => {
+          if (gameConfig.playerCount > MIN_PLAYERS) {
+            gameConfig.playerCount--;
+            rebuildSlots();
+            render(container);
+          }
+        },
+        onNext: () => {
+          if (gameConfig.playerCount < MAX_PLAYERS) {
+            gameConfig.playerCount++;
+            rebuildSlots();
+            render(container);
+          }
+        },
+      }),
+    );
 
     // --- Player slots ---
     const slotList = document.createElement('div');
@@ -106,21 +210,19 @@ export function createGameSetup(
 
     wrapper.appendChild(slotList);
 
-    // --- Map selection ---
-    const mapRow = document.createElement('div');
-    mapRow.className = 'setup-row';
-
-    const mapLabel = document.createElement('span');
-    mapLabel.className = 'setup-label';
-    mapLabel.textContent = 'MAP';
-    mapRow.appendChild(mapLabel);
-
-    const mapVal = document.createElement('span');
-    mapVal.className = 'setup-value';
-    mapVal.textContent = gameConfig.map;
-    mapRow.appendChild(mapVal);
-
-    wrapper.appendChild(mapRow);
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'MAP',
+        value: gameConfig.map,
+        valueClassName: 'setup-value setup-map-value',
+        previousButtonClassName: 'setup-btn setup-map-btn',
+        nextButtonClassName: 'setup-btn setup-map-btn',
+        previousDisabled: availableMaps.length <= 1,
+        nextDisabled: availableMaps.length <= 1,
+        onPrevious: () => cycleMap(-1, container),
+        onNext: () => cycleMap(1, container),
+      }),
+    );
 
     // --- Buttons ---
     const btnRow = document.createElement('div');
@@ -149,7 +251,7 @@ export function createGameSetup(
     hint.textContent = 'ESC to go back';
     wrapper.appendChild(hint);
 
-    container.appendChild(wrapper);
+    content.appendChild(wrapper);
   }
 
   return {
@@ -157,11 +259,16 @@ export function createGameSetup(
 
     onEnter(container: HTMLElement) {
       resetConfig();
+      availableMaps = [{ label: gameConfig.map, file: gameConfig.mapFile }];
       render(container);
+      void loadAvailableMaps(container);
     },
 
     onExit() {
       wrapper = null;
+      mapListRequestId++;
+      stageElements?.destroy();
+      stageElements = null;
     },
 
     onKeyDown(e: KeyboardEvent) {

@@ -32,7 +32,10 @@ function pixelsToCanvas(
 
   if (width > 0 && height > 0) {
     const ctx = canvas.getContext('2d')!;
-    const imageData = new ImageData(pixels, width, height);
+    // Normalize to a plain ArrayBuffer-backed view so strict DOM typings accept it.
+    const imagePixels = new Uint8ClampedArray(pixels.length);
+    imagePixels.set(pixels);
+    const imageData = new ImageData(imagePixels, width, height);
     ctx.putImageData(imageData, 0, 0);
   }
 

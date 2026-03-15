@@ -1,3 +1,4 @@
+import { assets } from '../assets/asset-registry';
 import type { Player, Direction } from '../engine/player';
 
 /** Player colors matching the original Atomic Bomberman */
@@ -14,18 +15,59 @@ export const PLAYER_COLORS: string[] = [
   '#FF88CC', // Player 10: Pink
 ];
 
+interface LoadedPlayerAnimation {
+  frames: HTMLCanvasElement[];
+  hotspots: { x: number; y: number }[];
+}
+
+interface ImportedPlayerSprites {
+  stand: LoadedPlayerAnimation;
+  walk: LoadedPlayerAnimation;
+  shadow: LoadedPlayerAnimation | null;
+}
+
+const STAND_FRAME_BY_DIRECTION: Record<Exclude<Direction, 'none'>, number> = {
+  right: 0,
+  up: 1,
+  down: 2,
+  left: 3,
+};
+const WALK_GROUP_BY_DIRECTION: Record<Exclude<Direction, 'none'>, number> = {
+  right: 0,
+  up: 1,
+  down: 2,
+  left: 3,
+};
+const WALK_FRAMES_PER_DIRECTION = 15;
+const WALK_CYCLE_FPS = 14;
+const PLAYER_SPRITE_HEIGHT_TILES = 2;
+
 export class PlayerRenderer {
+  private assetLoadStarted = false;
+  private importedSprites: ImportedPlayerSprites | null = null;
+
+  constructor() {
+    this.ensureImportedSprites();
+  }
+
   /** Draw a player on the grid using fractional grid coordinates. */
   renderPlayer(
     ctx: CanvasRenderingContext2D,
     player: Player,
     tileW: number,
     tileH: number,
+    elapsedTime = 0,
   ): void {
+    this.ensureImportedSprites();
+
     const cx = player.x * tileW + tileW / 2;
     const cy = player.y * tileH + tileH / 2;
     const radius = Math.min(tileW, tileH) * 0.35;
     const color = PLAYER_COLORS[player.index] || '#FFF';
+
+    if (this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
+      return;
+    }
 
     if (!player.alive) {
       // Dead player: gray circle with X eyes
@@ -59,6 +101,132 @@ export class PlayerRenderer {
 
     // Facing direction indicator (small triangle)
     this.renderFacingIndicator(ctx, cx, cy, radius, player.facing);
+  }
+
+  private ensureImportedSprites(): void {
+    if (this.assetLoadStarted) return;
+    this.assetLoadStarted = true;
+
+    void Promise.all([
+      assets.getAnimation('STAND.ANI'),
+      assets.getAnimation('WALK.ANI'),
+      assets.getAnimation('SHADOW.ANI').catch(() => null),
+    ]).then(([stand, walk, shadow]) => {
+      if (stand.frames.length === 0 || walk.frames.length === 0) {
+        return;
+      }
+
+      this.importedSprites = { stand, walk, shadow };
+    }).catch(() => {
+      // Missing player assets are expected before the user imports original files.
+    });
+  }
+
+  private renderImportedPlayer(
+    ctx: CanvasRenderingContext2D,
+    player: Player,
+    cx: number,
+    cy: number,
+    tileH: number,
+    elapsedTime: number,
+  ): boolean {
+    if (!this.importedSprites) {
+      return false;
+    }
+
+    const shadowFrame = this.importedSprites.shadow?.frames[0];
+    const shadowHotspot = this.importedSprites.shadow?.hotspots[0];
+    if (shadowFrame && shadowHotspot) {
+      this.drawImportedFrame(ctx, shadowFrame, shadowHotspot, cx, cy, tileH, false);
+    }
+
+    const frameData = player.moving
+      ? this.selectWalkFrame(this.importedSprites.walk, player.facing, elapsedTime)
+      : this.selectStandFrame(this.importedSprites.stand, player.facing);
+
+    if (!frameData) {
+      return false;
+    }
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (!player.alive) {
+      ctx.filter = 'grayscale(1) brightness(0.7)';
+      ctx.globalAlpha = 0.9;
+    }
+    this.drawImportedFrame(ctx, frameData.frame, frameData.hotspot, cx, cy, tileH, true);
+    ctx.restore();
+
+    if (!player.alive) {
+      this.renderDeadEyes(ctx, cx, cy - tileH * 0.35, tileH * 0.12);
+    }
+
+    return true;
+  }
+
+  private drawImportedFrame(
+    ctx: CanvasRenderingContext2D,
+    frame: HTMLCanvasElement,
+    hotspot: { x: number; y: number },
+    cx: number,
+    cy: number,
+    tileH: number,
+    pixelated: boolean,
+  ): void {
+    const targetHeight = tileH * PLAYER_SPRITE_HEIGHT_TILES;
+    const scale = targetHeight / Math.max(1, frame.height);
+    const drawWidth = frame.width * scale;
+    const drawHeight = frame.height * scale;
+    const drawX = cx - hotspot.x * scale;
+    const drawY = cy - hotspot.y * scale;
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = !pixelated;
+    ctx.drawImage(frame, drawX, drawY, drawWidth, drawHeight);
+    ctx.restore();
+  }
+
+  private selectStandFrame(
+    animation: LoadedPlayerAnimation,
+    facing: Direction,
+  ): { frame: HTMLCanvasElement; hotspot: { x: number; y: number } } | null {
+    if (animation.frames.length === 0) {
+      return null;
+    }
+
+    const direction = facing === 'none' ? 'down' : facing;
+    const frameIndex = Math.min(
+      animation.frames.length - 1,
+      STAND_FRAME_BY_DIRECTION[direction],
+    );
+
+    return {
+      frame: animation.frames[frameIndex],
+      hotspot: animation.hotspots[frameIndex] ?? animation.hotspots[0] ?? { x: 0, y: 0 },
+    };
+  }
+
+  private selectWalkFrame(
+    animation: LoadedPlayerAnimation,
+    facing: Direction,
+    elapsedTime: number,
+  ): { frame: HTMLCanvasElement; hotspot: { x: number; y: number } } | null {
+    if (animation.frames.length === 0) {
+      return null;
+    }
+
+    const direction = facing === 'none' ? 'down' : facing;
+    const groupIndex = WALK_GROUP_BY_DIRECTION[direction];
+    const offset = Math.floor(elapsedTime * WALK_CYCLE_FPS) % WALK_FRAMES_PER_DIRECTION;
+    const frameIndex = Math.min(
+      animation.frames.length - 1,
+      groupIndex * WALK_FRAMES_PER_DIRECTION + offset,
+    );
+
+    return {
+      frame: animation.frames[frameIndex],
+      hotspot: animation.hotspots[frameIndex] ?? animation.hotspots[0] ?? { x: 0, y: 0 },
+    };
   }
 
   /** Draw a small triangle on the edge of the player circle showing facing direction. */
@@ -150,5 +318,26 @@ export class PlayerRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(index + 1), cx, cy + radius * 0.35);
+  }
+
+  private renderDeadEyes(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    size: number,
+  ): void {
+    const eyeOffsetX = size * 1.5;
+
+    ctx.strokeStyle = '#C00';
+    ctx.lineWidth = Math.max(1.5, size * 0.3);
+
+    for (const offset of [-eyeOffsetX, eyeOffsetX]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + offset - size, cy - size);
+      ctx.lineTo(cx + offset + size, cy + size);
+      ctx.moveTo(cx + offset + size, cy - size);
+      ctx.lineTo(cx + offset - size, cy + size);
+      ctx.stroke();
+    }
   }
 }

@@ -92,6 +92,7 @@ export function showAssetLoaderScreen(
 
     // ===== State =====
     let selectedFile: File | null = null;
+    let urlLooksValid = false;
 
     // ===== Dropzone interactions =====
     dropzone.addEventListener('click', () => fileInput.click());
@@ -116,7 +117,15 @@ export function showAssetLoaderScreen(
     });
 
     function selectFile(file: File) {
+      if (!file.name.toLowerCase().endsWith('.zip')) {
+        showError('Please select a .zip file.');
+        loadBtn.disabled = true;
+        return;
+      }
+
+      hideError();
       selectedFile = file;
+      urlLooksValid = false;
       const label = dropzone.querySelector('.dropzone-label');
       if (label) label.textContent = file.name;
       urlInput.value = '';
@@ -125,18 +134,28 @@ export function showAssetLoaderScreen(
 
     // URL input enables button
     urlInput.addEventListener('input', () => {
-      if (urlInput.value.trim().length > 0) {
+      hideError();
+      const value = urlInput.value.trim();
+      if (value.length > 0) {
         selectedFile = null;
-        loadBtn.disabled = false;
+        urlLooksValid = isLikelyHttpUrl(value);
+        loadBtn.disabled = !urlLooksValid;
       } else if (!selectedFile) {
+        urlLooksValid = false;
         loadBtn.disabled = true;
+      }
+    });
+
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !loadBtn.disabled) {
+        e.preventDefault();
+        loadBtn.click();
       }
     });
 
     // ===== Load button =====
     loadBtn.addEventListener('click', async () => {
-      const source: File | string =
-        selectedFile ?? urlInput.value.trim();
+      const source: File | string = selectedFile ?? urlInput.value.trim();
       if (!source) return;
 
       hideError();
@@ -196,7 +215,7 @@ export function showAssetLoaderScreen(
           }
         }
       } catch {
-        // Silently ignore — cache check is non-critical
+        // Silently ignore - cache check is non-critical.
       }
     })();
 
@@ -222,4 +241,13 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isLikelyHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }

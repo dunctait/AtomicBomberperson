@@ -1,44 +1,50 @@
 import type { GameState } from '../engine/state-machine';
-import { assets } from '../assets/asset-registry';
+import { mountVirtualStage, type VirtualStageElements } from '../ui/virtual-stage';
+import { applyBakedStageArt } from '../ui/baked-stage-art';
 
 export function createTitleScreen(
   onTransition: (state: string) => void,
 ): GameState {
+  let stageElements: VirtualStageElements | null = null;
+  let autoAdvanceTimeout: ReturnType<typeof setTimeout> | null = null;
+
   return {
     name: 'title-screen',
 
     onEnter(container: HTMLElement) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'screen title-screen';
+      stageElements = mountVirtualStage(container, 'title-screen');
+      const { stage, content } = stageElements;
 
       const title = document.createElement('h1');
       title.className = 'title-glow';
       title.textContent = 'ATOMIC BOMBERPERSON';
-      wrapper.appendChild(title);
+      content.appendChild(title);
 
       const subtitle = document.createElement('p');
       subtitle.className = 'title-prompt';
       subtitle.textContent = 'Press ENTER to start';
-      wrapper.appendChild(subtitle);
+      content.appendChild(subtitle);
 
-      container.appendChild(wrapper);
-
-      // Try to load TITLE.PCX as the background image
-      assets.getImage('TITLE.PCX').then((canvas) => {
-        // Only apply if this screen is still mounted
-        if (!wrapper.isConnected) return;
-
-        const dataURL = canvas.toDataURL();
-        wrapper.style.backgroundImage = `url(${dataURL})`;
-        wrapper.style.backgroundSize = 'cover';
-        wrapper.style.backgroundPosition = 'center';
-      }).catch(() => {
-        // Asset not available — keep the CSS-only title screen
+      applyBakedStageArt({
+        stage,
+        assetName: 'TITLE.PCX',
+        bakedClassName: 'title-screen--baked-art',
+        hiddenElements: [title, subtitle],
       });
+
+      // Show splash briefly, then enter menu automatically.
+      autoAdvanceTimeout = setTimeout(() => {
+        onTransition('main-menu');
+      }, 1000);
     },
 
     onExit() {
-      // nothing to clean up
+      if (autoAdvanceTimeout) {
+        clearTimeout(autoAdvanceTimeout);
+        autoAdvanceTimeout = null;
+      }
+      stageElements?.destroy();
+      stageElements = null;
     },
 
     onKeyDown(e: KeyboardEvent) {
