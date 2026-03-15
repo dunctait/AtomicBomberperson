@@ -1,5 +1,6 @@
 import { type GameGrid, GRID_COLS, GRID_ROWS, CellContent } from './game-grid';
 import { type PowerupSetting } from '../assets/parsers/sch-parser';
+import { type PlayerStats } from './player';
 
 export enum PowerupType {
   ExtraBomb = 0,
@@ -22,18 +23,6 @@ export interface Powerup {
   row: number;
   type: PowerupType;
   revealed: boolean; // only visible after brick is destroyed
-}
-
-export interface PlayerStats {
-  maxBombs: number;
-  bombRange: number;
-  speed: number;
-  canKick: boolean;
-  canPunch: boolean;
-  canGrab: boolean;
-  hasTrigger: boolean;
-  hasJelly: boolean;
-  hasSpooger: boolean;
 }
 
 /**

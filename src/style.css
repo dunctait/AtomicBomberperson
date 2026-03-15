@@ -634,6 +634,45 @@ html, body {
   color: #4a4a6e;
 }
 
+/* ===== PLAYER STATS HUD ===== */
+
+.gameplay-player-hud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  width: 600px;
+  max-width: 100%;
+  padding: 0.3rem 0;
+}
+
+.hud-player {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.4rem;
+  color: #c0c0e0;
+  transition: opacity 0.3s;
+}
+
+.hud-player-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid #000;
+  flex-shrink: 0;
+}
+
+.hud-player-label {
+  color: #a0a0c0;
+  min-width: 2em;
+}
+
+.hud-stat {
+  color: #53d8fb;
+  padding: 0 0.15rem;
+}
+
 /* ===== CANVAS (kept for future game use) ===== */
 
 canvas {

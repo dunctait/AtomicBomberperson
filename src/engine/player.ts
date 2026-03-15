@@ -8,6 +8,12 @@ export interface PlayerStats {
   bombRange: number;
   speed: number;        // tiles per second
   activeBombs: number;
+  canKick: boolean;
+  canPunch: boolean;
+  canGrab: boolean;
+  hasTrigger: boolean;
+  hasJelly: boolean;
+  hasSpooger: boolean;
 }
 
 /** Size of the player hitbox in tiles (centered on position). */
@@ -56,6 +62,12 @@ export class Player {
       bombRange: 2,
       speed: 3.0,
       activeBombs: 0,
+      canKick: false,
+      canPunch: false,
+      canGrab: false,
+      hasTrigger: false,
+      hasJelly: false,
+      hasSpooger: false,
     };
   }
 
