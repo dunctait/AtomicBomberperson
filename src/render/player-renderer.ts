@@ -43,13 +43,7 @@ interface ImportedPlayerSprites {
   shadow: LoadedPlayerAnimation | null;
 }
 
-const STAND_FRAME_BY_DIRECTION: Record<Exclude<Direction, 'none'>, number> = {
-  right: 0,
-  up: 1,
-  down: 2,
-  left: 3,
-};
-const WALK_GROUP_BY_DIRECTION: Record<Exclude<Direction, 'none'>, number> = {
+const DIRECTION_INDEX: Record<Exclude<Direction, 'none'>, number> = {
   right: 0,
   up: 1,
   down: 2,
@@ -237,7 +231,7 @@ export class PlayerRenderer {
     const direction = facing === 'none' ? 'down' : facing;
     const frameIndex = Math.min(
       animation.frames.length - 1,
-      STAND_FRAME_BY_DIRECTION[direction],
+      DIRECTION_INDEX[direction],
     );
 
     return {
@@ -256,7 +250,7 @@ export class PlayerRenderer {
     }
 
     const direction = facing === 'none' ? 'down' : facing;
-    const groupIndex = WALK_GROUP_BY_DIRECTION[direction];
+    const groupIndex = DIRECTION_INDEX[direction];
     const offset = Math.floor(elapsedTime * WALK_CYCLE_FPS) % WALK_FRAMES_PER_DIRECTION;
     const frameIndex = Math.min(
       animation.frames.length - 1,

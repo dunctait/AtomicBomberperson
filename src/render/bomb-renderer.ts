@@ -1,5 +1,5 @@
 import type { Bomb, Explosion } from '../engine/bomb';
-import { assets } from '../assets/asset-registry';
+import { loadAnimationWithFallback } from './render-utils';
 
 /**
  * EXPLODE.ANI / FLAME.ANI frame layout (5 animation frames each):
@@ -21,7 +21,13 @@ const FLAME_DOWN_END = 25;
 const FLAME_LEFT_END = 30;
 
 const EXPLOSION_DURATION = 0.5;
-const BOMB_ANIM_FPS = 8;
+
+/** Base animation speed for bomb sprites (frames per second) when fuse is full. */
+const BOMB_ANIM_FPS_BASE = 6;
+/** Maximum animation speed as the bomb fuse nears zero (frames per second). */
+const BOMB_ANIM_FPS_MAX = 20;
+/** Full fuse duration in seconds — must match BOMB_FUSE in bomb.ts. */
+const BOMB_FUSE_DURATION = 2.0;
 
 export class BombRenderer {
   private bombFrames: HTMLCanvasElement[] | null = null;
@@ -37,27 +43,16 @@ export class BombRenderer {
     if (this.loadStarted) return;
     this.loadStarted = true;
 
-    void assets.getAnimation('BOMBS.ANI').then((anim) => {
-      if (anim.frames.length > 0) {
+    // Try BOMB.ANI first; fall back to BOMBS.ANI if it is not available.
+    void loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1).then((anim) => {
+      if (anim) {
         this.bombFrames = anim.frames;
         this.bombHotspots = anim.hotspots;
       }
-    }).catch(() => {});
+    });
 
-    // Try EXPLODE.ANI first; fall back to FLAME.ANI if it is not available.
-    // Both files share the same 7-group × 5-frame layout defined by the
-    // FLAME_* constants above.
-    void assets.getAnimation('EXPLODE.ANI').then((anim) => {
-      if (anim.frames.length >= 35) {
-        this.flameFrames = anim.frames;
-      }
-    }).catch(() => {
-      // EXPLODE.ANI not found — try FLAME.ANI as fallback sprite source
-      void assets.getAnimation('FLAME.ANI').then((anim) => {
-        if (anim.frames.length >= 35) {
-          this.flameFrames = anim.frames;
-        }
-      }).catch(() => {});
+    void loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35).then((anim) => {
+      if (anim) this.flameFrames = anim.frames;
     });
   }
 
@@ -72,31 +67,46 @@ export class BombRenderer {
     for (const bomb of bombs) {
       if (bomb.exploded) continue;
 
-      const cx = bomb.col * tileW + tileW / 2;
-      const cy = bomb.row * tileH + tileH / 2;
+      const cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
+      const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
       if (this.bombFrames && this.bombHotspots) {
-        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time);
+        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
       } else {
-        this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time);
+        this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
       }
     }
   }
 
+  /**
+   * Render a bomb using the imported BOMB.ANI / BOMBS.ANI sprite frames.
+   *
+   * Frame selection combines absolute elapsed time (for continuous cycling)
+   * with the bomb's remaining fuse timer (to speed up the cycle as the bomb
+   * nears detonation, creating a "ticking" urgency effect).
+   */
   private renderImportedBomb(
     ctx: CanvasRenderingContext2D,
     cx: number, cy: number,
     tileW: number, tileH: number,
     time: number,
+    bombTimer: number,
   ): void {
     const frames = this.bombFrames!;
     const hotspots = this.bombHotspots!;
-    const frameIndex = Math.floor(time * BOMB_ANIM_FPS) % frames.length;
-    const frame = frames[frameIndex];
-    const hotspot = hotspots[frameIndex] ?? hotspots[0];
 
-    // Scale bomb to fit within a tile
-    const scale = tileH / Math.max(1, frame.height);
+    // Speed increases linearly as the fuse burns down:
+    //   timer == BOMB_FUSE_DURATION  → BOMB_ANIM_FPS_BASE
+    //   timer == 0                   → BOMB_ANIM_FPS_MAX
+    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
+    const fps = BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
+
+    const frameIndex = Math.floor(time * fps) % frames.length;
+    const frame = frames[frameIndex];
+    const hotspot = hotspots[frameIndex] ?? hotspots[0] ?? { x: 0, y: 0 };
+
+    // Scale bomb sprite to fit within one tile while preserving aspect ratio.
+    const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
     const drawW = frame.width * scale;
     const drawH = frame.height * scale;
     const drawX = cx - hotspot.x * scale;
@@ -108,13 +118,20 @@ export class BombRenderer {
     ctx.restore();
   }
 
+  /**
+   * Fallback bomb rendering using canvas primitives.
+   * Pulse speed increases as the fuse burns down to mirror the imported-sprite behaviour.
+   */
   private renderFallbackBomb(
     ctx: CanvasRenderingContext2D,
     cx: number, cy: number,
     tileW: number, tileH: number,
     time: number,
+    bombTimer: number,
   ): void {
-    const pulseSpeed = 4 + (2.0) * 6;
+    // Mirror the imported-sprite speed ramp for visual consistency.
+    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
+    const pulseSpeed = BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
     const pulsePhase = Math.sin(time * pulseSpeed);
     const scale = 0.7 + 0.3 * (0.5 + 0.5 * pulsePhase);
     const radius = Math.min(tileW, tileH) * 0.35 * scale;

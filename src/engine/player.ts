@@ -146,8 +146,13 @@ export class Player {
       this.x = newX;
       this.y = newY;
     } else {
-      // Cannot move directly -- try corner sliding
-      this.applyCornerSlide(dt, grid, bombs);
+      // Check for bomb kick before trying corner slide
+      if (this.stats.canKick && dir !== 'none' && this.tryKickBomb(dir, grid, bombs)) {
+        // Bomb was kicked — player stays in place this frame
+      } else {
+        // Cannot move directly -- try corner sliding
+        this.applyCornerSlide(dt, grid, bombs);
+      }
     }
 
     // Clamp position so player stays within the grid
@@ -233,6 +238,30 @@ export class Player {
         }
       }
     }
+  }
+
+  /**
+   * Try to kick a bomb in the given direction.
+   * The player must be aligned closely enough to a grid row/column in the
+   * perpendicular axis, and there must be a bomb in the adjacent cell.
+   * Returns true if a kick was initiated.
+   */
+  private tryKickBomb(
+    dir: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+    bombs: BombManager,
+  ): boolean {
+    const ddx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0;
+    const ddy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0;
+
+    // The cell directly in front of the player in the movement direction
+    const frontCol = Math.round(this.x) + ddx;
+    const frontRow = Math.round(this.y) + ddy;
+
+    // Check there is actually a blocking bomb there (not just any bomb)
+    if (!bombs.isBombBlocking(frontCol, frontRow, this.index)) return false;
+
+    return bombs.kickBomb(frontCol, frontRow, dir, grid);
   }
 
   die(): void {

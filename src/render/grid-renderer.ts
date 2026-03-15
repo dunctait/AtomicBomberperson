@@ -1,5 +1,6 @@
 import { type GameGrid, GRID_COLS, GRID_ROWS, CellContent } from '../engine/game-grid';
 import { assets } from '../assets/asset-registry';
+import { loadAnimationWithFallback } from './render-utils';
 
 /** TILES ANI frame indices: 0 = empty floor, 1 = brick, 2 = solid wall */
 const TILE_FRAME_EMPTY = 0;
@@ -52,18 +53,8 @@ export class GridRenderer {
       }
     }).catch(() => {});
 
-    // Try XBRICK0.ANI first (preferred), fall back to BRICK.ANI
-    void assets.getAnimation('XBRICK0.ANI').then((anim) => {
-      if (anim.frames.length > 0) {
-        this.crumbleSprites = anim.frames;
-      }
-    }).catch(() => {
-      // XBRICK0.ANI not found — try the alternate asset name
-      void assets.getAnimation('BRICK.ANI').then((anim) => {
-        if (anim.frames.length > 0) {
-          this.crumbleSprites = anim.frames;
-        }
-      }).catch(() => {});
+    void loadAnimationWithFallback('XBRICK0.ANI', 'BRICK.ANI').then((anim) => {
+      if (anim) this.crumbleSprites = anim.frames;
     });
   }
 
