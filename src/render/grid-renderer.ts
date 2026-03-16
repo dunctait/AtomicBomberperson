@@ -199,7 +199,11 @@ export class GridRenderer {
         this.renderFallbackTile(ctx, x, y, tw, th, type);
       }
     }
-    // Empty cells: nothing to draw — field background already visible
+    // Empty cells: draw floor tile over the field background to cover any
+    // dark border textures that show through when bricks are cleared by spawns.
+    if (type === CellContent.Empty && this.tileSprites && this.tileSprites.length > TILE_FRAME_EMPTY) {
+      ctx.drawImage(this.tileSprites[TILE_FRAME_EMPTY], x, y, tw, th);
+    }
   }
 
   private renderImportedTile(

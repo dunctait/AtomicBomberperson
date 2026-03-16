@@ -49,10 +49,9 @@ export function resetConfig(): void {
 export function rebuildSlots(): void {
   gameConfig.players = [];
   for (let i = 0; i < gameConfig.playerCount; i++) {
-    // Player 0 and Player 1 default to human (local multiplayer);
-    // remaining slots default to AI bots.
+    // Player 0 defaults to human; remaining slots default to AI bots.
     gameConfig.players.push({
-      type: i <= 1 ? 'human' : 'ai',
+      type: i === 0 ? 'human' : 'ai',
     });
   }
 }

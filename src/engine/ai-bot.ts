@@ -101,6 +101,11 @@ export class AIBot {
   private bombCooldown: number;
   /** Accumulated flee delay timer (Easy bots hesitate before fleeing). */
   private fleeDelayTimer: number;
+  /** Stuck detection: last grid position recorded at think time. */
+  private lastThinkCol = -1;
+  private lastThinkRow = -1;
+  /** How many consecutive think cycles the AI has been in the same cell. */
+  private stuckCounter = 0;
 
   constructor(player: Player, difficulty: AIDifficulty = 'normal') {
     this.player = player;
@@ -150,6 +155,24 @@ export class AIBot {
   ): void {
     this.clearInputs();
     const pos = this.player.getGridPos();
+
+    // ── Stuck detection ──────────────────────────────────────────────
+    if (pos.col === this.lastThinkCol && pos.row === this.lastThinkRow) {
+      this.stuckCounter++;
+    } else {
+      this.stuckCounter = 0;
+    }
+    this.lastThinkCol = pos.col;
+    this.lastThinkRow = pos.row;
+
+    // If stuck for too long, clear path and force wander with a fresh direction
+    if (this.stuckCounter >= 4 && this.currentGoal !== 'flee') {
+      this.path = [];
+      this.pathIndex = 0;
+      this.stuckCounter = 0;
+      this.wanderAway(pos, grid, bombs);
+      return;
+    }
 
     // ── Priority 0: THROW carried bomb toward nearest enemy ───────────
     if (this.player.isCarryingBomb()) {
@@ -227,16 +250,6 @@ export class AIBot {
           // Re-think quickly to flee
           this.thinkTimer = THINK_QUICK_RETHINK;
           return;
-        }
-        // Best target isn't safe — try reachable neighbors as alternative bomb spots
-        const altTarget = this.findAlternativeBombPosition(pos, grid, bombs);
-        if (altTarget) {
-          this.path = this.findPath(pos.col, pos.row, altTarget.col, altTarget.row, grid, bombs, true);
-          if (this.path.length > 0) {
-            this.pathIndex = 0;
-            this.currentGoal = 'attack';
-            return;
-          }
         }
       } else {
         // Navigate toward target (avoid danger zones)
@@ -497,6 +510,9 @@ export class AIBot {
       const enemyNear = this.wouldHitEnemy(current.col, current.row, range, grid, allPlayers);
 
       if (brickCount > 0 || enemyNear) {
+        // Only consider positions where bombing is survivable
+        if (!this.simPlaceBombIsSafe(current.col, current.row, grid, bombs)) continue;
+
         // Score: bricks destroyed, biased by closeness (fpc_atomic picks max bricks, closest)
         const score = (brickCount + (enemyNear ? this.settings.enemyHitScoreBonus : 0)) * 10 - current.dist;
         if (score > bestScore) {
@@ -518,39 +534,6 @@ export class AIBot {
     }
 
     return bestTarget;
-  }
-
-  /**
-   * When the best bomb target isn't safe, find a nearby reachable cell
-   * where bombing IS safe and would still hit at least one brick.
-   */
-  private findAlternativeBombPosition(pos: GridPos, grid: GameGrid, bombs: BombManager): GridPos | null {
-    const range = this.player.stats.bombRange;
-    const visited = new Set<string>();
-    const queue: GridPos[] = [];
-    visited.add(`${pos.col},${pos.row}`);
-
-    // Seed with walkable neighbors
-    for (const dir of DIRS) {
-      const nc = pos.col + dir.dx;
-      const nr = pos.row + dir.dy;
-      if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
-          grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
-        const key = `${nc},${nr}`;
-        if (!visited.has(key)) {
-          visited.add(key);
-          queue.push({ col: nc, row: nr });
-        }
-      }
-    }
-
-    for (const candidate of queue) {
-      if (this.countBricksHit(candidate.col, candidate.row, range, grid) > 0 &&
-          this.simPlaceBombIsSafe(candidate.col, candidate.row, grid, bombs)) {
-        return candidate;
-      }
-    }
-    return null;
   }
 
   /** Count how many bricks a bomb at (col, row) would destroy. */
@@ -628,6 +611,49 @@ export class AIBot {
     } else {
       this.path = [];
       this.pathIndex = 0;
+    }
+  }
+
+  /**
+   * Wander away from the current position when stuck.
+   * Uses a multi-step BFS wander to pick a walkable cell 2-4 steps away,
+   * breaking out of single-step oscillation patterns.
+   */
+  private wanderAway(pos: GridPos, grid: GameGrid, bombs: BombManager): void {
+    const visited = new Set<string>();
+    const queue: { col: number; row: number; dist: number }[] = [
+      { col: pos.col, row: pos.row, dist: 0 },
+    ];
+    visited.add(`${pos.col},${pos.row}`);
+    const farCandidates: GridPos[] = [];
+
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      // Collect cells 2-4 steps away as wander destinations
+      if (cur.dist >= 2 && cur.dist <= 4 && this.isCellSafe(cur.col, cur.row, grid, bombs)) {
+        farCandidates.push({ col: cur.col, row: cur.row });
+      }
+      if (cur.dist >= 4) continue;
+      for (const dir of DIRS) {
+        const nc = cur.col + dir.dx;
+        const nr = cur.row + dir.dy;
+        const key = `${nc},${nr}`;
+        if (visited.has(key)) continue;
+        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        if (!grid.isWalkable(nc, nr) || bombs.hasBomb(nc, nr)) continue;
+        visited.add(key);
+        queue.push({ col: nc, row: nr, dist: cur.dist + 1 });
+      }
+    }
+
+    if (farCandidates.length > 0) {
+      const target = farCandidates[Math.floor(Math.random() * farCandidates.length)];
+      this.path = this.findPath(pos.col, pos.row, target.col, target.row, grid, bombs, false);
+      this.pathIndex = 0;
+      this.currentGoal = 'wander';
+    } else {
+      // Truly stuck — fall back to normal single-step wander
+      this.wander(grid, bombs);
     }
   }
 

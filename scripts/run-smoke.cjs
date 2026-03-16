@@ -41,7 +41,9 @@ const {
   applySchemeStartingInventory,
   PowerupType,
 } = require('../src/engine/powerup.ts');
-const { parseScheme } = require('../src/assets/parsers/sch-parser.ts');
+const { parseScheme, TileType } = require('../src/assets/parsers/sch-parser.ts');
+const { AIBot } = require('../src/engine/ai-bot.ts');
+const { PowerupManager } = require('../src/engine/powerup.ts');
 const { clearAll, storeFile, storeMetadata } = require('../src/assets/asset-db.ts');
 const { assets } = require('../src/assets/asset-registry.ts');
 
@@ -1842,6 +1844,179 @@ function testKickBombStopsAtGridEdge() {
   assert.ok(!bomb.sliding, 'bomb should have stopped sliding');
 }
 
+// -- Integration tests: AI gameplay scenarios --
+
+/** Create a BASIC-like scheme grid for integration tests */
+function createBasicSchemeGrid() {
+  const grid = [];
+  for (let r = 0; r < 11; r++) {
+    const row = [];
+    for (let c = 0; c < 15; c++) {
+      if (r % 2 === 0 && c % 2 === 0) {
+        row.push(TileType.Solid); // interior pillars
+      } else {
+        row.push(TileType.Brick); // potential bricks
+      }
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+function testAIPlacesBombFromCornerSpawn() {
+  // Simulate AI at corner spawn (1,1) on BASIC scheme - should eventually place a bomb
+  const scheme = {
+    name: 'TEST_BASIC',
+    brickDensity: 100,
+    grid: createBasicSchemeGrid(),
+    spawns: [{ player: 0, x: 1, y: 1, team: 0 }],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  };
+  const grid = new GameGrid(scheme);
+  const bombs = new BombManager();
+  const powerups = new PowerupManager(grid, scheme.powerups);
+  const player = new Player(0, 'ai', 1, 1);
+  const bot = new AIBot(player, 'normal');
+
+  // Run 120 AI think+update cycles (simulating ~2 seconds of game time)
+  const dt = 1 / 60;
+  let bombPlaced = false;
+  for (let i = 0; i < 120; i++) {
+    bot.update(dt, grid, bombs, powerups, [player]);
+    // Check if AI set inputBomb
+    if (player.inputBomb) {
+      const { col, row } = player.getGridPos();
+      if (bombs.placeBomb(col, row, player.index, player.stats.bombRange, player.stats.hasJelly)) {
+        player.stats.activeBombs++;
+        bombPlaced = true;
+      }
+      player.inputBomb = false;
+    }
+    player.update(dt, grid, bombs);
+    bombs.update(dt, grid);
+  }
+
+  assert.ok(bombPlaced, 'AI should place at least one bomb within 2 seconds from corner spawn');
+}
+
+function testAIDoesNotBombUnsafePosition() {
+  // AI in a 1-cell dead end should NOT place a bomb (no escape)
+  const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
+  // Create a dead-end pocket: only cell (1,1) is walkable, surrounded by walls
+  for (let r = 0; r < 11; r++) {
+    for (let c = 0; c < 15; c++) {
+      gridSpec[r][c] = (r === 1 && c === 1) ? TileType.Empty : TileType.Solid;
+    }
+  }
+  const scheme = {
+    name: 'TEST_TRAP',
+    brickDensity: 0,
+    grid: gridSpec,
+    spawns: [{ player: 0, x: 1, y: 1, team: 0 }],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  };
+  const grid = new GameGrid(scheme);
+  const bombs = new BombManager();
+  const powerups = new PowerupManager(grid, scheme.powerups);
+  const player = new Player(0, 'ai', 1, 1);
+  const bot = new AIBot(player, 'normal');
+
+  const dt = 1 / 60;
+  let bombPlaced = false;
+  for (let i = 0; i < 120; i++) {
+    bot.update(dt, grid, bombs, powerups, [player]);
+    if (player.inputBomb) {
+      const { col, row } = player.getGridPos();
+      if (bombs.placeBomb(col, row, player.index, player.stats.bombRange)) {
+        bombPlaced = true;
+      }
+      player.inputBomb = false;
+    }
+    player.update(dt, grid, bombs);
+    bombs.update(dt, grid);
+  }
+
+  assert.ok(!bombPlaced, 'AI should NOT bomb when trapped with no escape');
+}
+
+function testPlayerCannotWalkOffGrid() {
+  // Player at grid edge should be stopped by out-of-bounds collision
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 0, 0);
+
+  player.setInput('left', true);
+  for (let i = 0; i < 60; i++) {
+    player.update(1 / 60, grid, bombs);
+  }
+
+  assert.ok(player.x >= 0, `player should not go below x=0, got ${player.x}`);
+
+  player.setInput('left', false);
+  player.setInput('up', true);
+  for (let i = 0; i < 60; i++) {
+    player.update(1 / 60, grid, bombs);
+  }
+
+  assert.ok(player.y >= 0, `player should not go below y=0, got ${player.y}`);
+}
+
+function testSpawnClearingCreatesWalkableArea() {
+  // Spawns at interior positions should clear surrounding bricks
+  const scheme = {
+    name: 'TEST_SPAWN',
+    brickDensity: 100,
+    grid: createBasicSchemeGrid(),
+    spawns: [
+      { player: 0, x: 1, y: 1, team: 0 },
+      { player: 1, x: 13, y: 9, team: 0 },
+    ],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  };
+  const grid = new GameGrid(scheme);
+
+  // Spawn at (1,1) should clear surrounding brick cells (not solid pillars)
+  assert.ok(grid.isWalkable(1, 1), 'spawn cell (1,1) must be walkable');
+  assert.ok(grid.isWalkable(1, 0), 'cell above spawn (1,0) must be walkable');
+  assert.ok(grid.isWalkable(1, 2), 'cell below spawn (1,2) must be walkable');
+
+  // Spawn at (13,9) should clear surrounding cells
+  assert.ok(grid.isWalkable(13, 9), 'spawn cell (13,9) must be walkable');
+  assert.ok(grid.isWalkable(13, 10), 'cell below spawn (13,10) must be walkable');
+  assert.ok(grid.isWalkable(13, 8), 'cell above spawn (13,8) must be walkable');
+}
+
+function testGrabThrowCycleMoveBomb() {
+  // Verify grab+throw works correctly: place bomb, grab it, throw it
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 5, 5);
+  player.stats.canGrab = true;
+  player.facing = 'right';
+
+  // Place a bomb
+  bombs.placeBomb(5, 5, 0, 2);
+  assert.ok(bombs.hasBomb(5, 5), 'bomb should be at (5,5)');
+
+  // Grab it
+  const grabbed = bombs.grabBomb(5, 5, 0);
+  assert.ok(grabbed, 'should grab own bomb');
+  assert.ok(!bombs.hasBomb(5, 5), 'bomb should be removed from grid after grab');
+
+  // Throw it
+  bombs.throwBomb(grabbed, 5, 5, 'right', grid);
+  assert.ok(!bombs.hasBomb(5, 5), 'bomb should not be at origin after throw');
+  // Bomb should land 3-5 tiles right
+  assert.ok(bombs.bombs[0].col >= 8 && bombs.bombs[0].col <= 10,
+    `thrown bomb should land 3-5 tiles away, got col=${bombs.bombs[0].col}`);
+}
+
 async function run(name, fn) {
   try {
     await fn();
@@ -1921,6 +2096,13 @@ async function main() {
   await run('punch bomb fails when all landing cells walled', testPunchBombBlockedByWall);
   await run('kicked bomb stops at wall', testKickBombStopsAtWall);
   await run('kicked bomb stops at grid edge', testKickBombStopsAtGridEdge);
+
+  // Integration tests — realistic gameplay scenarios
+  await run('AI places bomb from corner spawn within 2 seconds', testAIPlacesBombFromCornerSpawn);
+  await run('AI does not bomb in dead-end with no escape', testAIDoesNotBombUnsafePosition);
+  await run('player cannot walk off grid edge', testPlayerCannotWalkOffGrid);
+  await run('spawn clearing creates walkable area around spawn points', testSpawnClearingCreatesWalkableArea);
+  await run('grab then throw moves bomb to expected landing position', testGrabThrowCycleMoveBomb);
 
   if (process.exitCode) {
     process.exit(process.exitCode);
