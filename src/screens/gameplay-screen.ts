@@ -21,6 +21,7 @@ import { parseScheme, TileType, type ParsedScheme } from '../assets/parsers/sch-
 import { getAllFileNames, getFile } from '../assets/asset-db';
 import { soundManager } from '../engine/sound-manager';
 import { ParticleSystem } from '../engine/particles';
+import { SuddenDeath } from '../engine/sudden-death';
 
 interface GameplayMapMeta {
   name: string;
@@ -105,6 +106,13 @@ const GAMEPLAY_HUD_POWERUPS: GameplayHudPowerupDefinition[] = [
   { enabled: (player) => player.hasSlowDisease(), label: 'SL', title: 'Slow disease', className: 'hud-powerup--danger' },
   { enabled: (player) => player.hasReverseDisease(), label: 'RV', title: 'Reverse controls disease', className: 'hud-powerup--danger' },
 ];
+
+function formatTimer(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const m = Math.floor(clamped / 60);
+  const s = clamped % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
 
 function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -539,6 +547,11 @@ export function createGameplayScreen(
   let gameOverWinnerIndex = -1;
   const GAME_OVER_DELAY = 3.0; // seconds before going to round results
 
+  // Round timer & sudden death
+  let roundTimeRemaining = gameConfig.roundTimerSeconds;
+  const suddenDeath = new SuddenDeath();
+  let hudTimerEl: HTMLSpanElement | null = null;
+
   // HUD element reference
   let hudStatsEl: HTMLDivElement | null = null;
   let gameplayHud: GameplayHudElements | null = null;
@@ -823,11 +836,16 @@ export function createGameplayScreen(
 
     const hudSummaries = appendGameplayHudSummaries(mapMeta);
 
+    // Timer display
+    hudTimerEl = document.createElement('span');
+    hudTimerEl.className = 'gameplay-timer';
+    hudTimerEl.textContent = formatTimer(gameConfig.roundTimerSeconds);
+
     const controls = document.createElement('span');
     controls.className = 'gameplay-controls';
     controls.textContent = 'Arrows: move | SPACE: bomb | ESC: quit';
 
-    root.append(mapMeta, controls);
+    root.append(mapMeta, hudTimerEl, controls);
     return { root, mapName, mapSource, ...hudSummaries };
   }
 
@@ -924,6 +942,10 @@ export function createGameplayScreen(
       gameOverMessage = '';
       gameOverWinnerIndex = -1;
 
+      // Reset round timer and sudden death
+      roundTimeRemaining = gameConfig.roundTimerSeconds;
+      suddenDeath.reset();
+
       // Start countdown
       countdownActive = true;
       countdownTimer = 0;
@@ -945,6 +967,7 @@ export function createGameplayScreen(
       particleSystem?.clear();
       initialized = false;
       hudStatsEl = null;
+      hudTimerEl = null;
       gameplayHud = null;
     },
 
@@ -1046,6 +1069,36 @@ export function createGameplayScreen(
         const pup = powerupManager.getAt(pos.col, pos.row);
         if (pup && pup.revealed) {
           powerupManager.destroyAt(pos.col, pos.row);
+        }
+      }
+
+      // Update round timer and sudden death
+      if (!suddenDeath.active) {
+        roundTimeRemaining -= dt;
+        if (roundTimeRemaining <= 0) {
+          roundTimeRemaining = 0;
+          suddenDeath.start();
+        }
+      }
+
+      if (suddenDeath.active) {
+        const dropped = suddenDeath.update(dt, gameGrid, players, bombManager, powerupManager);
+        if (dropped && shakeIntensity < SHAKE_MAX_INTENSITY) {
+          shakeIntensity = Math.min(shakeIntensity + 0.2, SHAKE_MAX_INTENSITY);
+        }
+      }
+
+      // Update timer HUD
+      if (hudTimerEl) {
+        if (suddenDeath.active) {
+          hudTimerEl.textContent = 'SUDDEN DEATH';
+          hudTimerEl.classList.add('gameplay-timer--danger');
+        } else {
+          hudTimerEl.textContent = formatTimer(roundTimeRemaining);
+          hudTimerEl.classList.toggle(
+            'gameplay-timer--warning',
+            roundTimeRemaining <= 30,
+          );
         }
       }
 

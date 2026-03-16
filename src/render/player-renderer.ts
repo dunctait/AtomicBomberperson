@@ -1,5 +1,6 @@
 import { assets } from '../assets/asset-registry';
 import type { Player, Direction } from '../engine/player';
+import { DEATH_ANIM_DURATION } from '../engine/player';
 
 /** Player colors matching the original Atomic Bomberman */
 export const PLAYER_COLORS: string[] = [
@@ -69,6 +70,9 @@ export class PlayerRenderer {
     tileH: number,
     elapsedTime = 0,
   ): void {
+    // Fully dead (animation finished) — don't render at all
+    if (!player.alive && player.deathTimer <= 0) return;
+
     this.ensureImportedSprites();
 
     const cx = player.x * tileW + tileW / 2;
@@ -76,28 +80,56 @@ export class PlayerRenderer {
     const radius = Math.min(tileW, tileH) * 0.35;
     const color = PLAYER_COLORS[player.index] || '#FFF';
 
+    // Death animation progress: 1.0 = just died, 0.0 = animation complete
+    const deathProgress = player.isDeathAnimating()
+      ? player.deathTimer / DEATH_ANIM_DURATION
+      : 0;
+
+    // During death animation, apply transform effects
+    if (player.isDeathAnimating()) {
+      // Flash/blink: rapid toggling. Skip rendering on "off" frames during first half
+      const blinkRate = 12; // blinks per second
+      const blinkPhase = Math.sin((DEATH_ANIM_DURATION - player.deathTimer) * blinkRate * Math.PI * 2);
+      if (deathProgress > 0.4 && blinkPhase < -0.3) return;
+
+      ctx.save();
+      // Fade out: opacity goes from 1.0 to 0.0 over the animation
+      ctx.globalAlpha = Math.max(0, deathProgress);
+
+      // Spin and shrink: rotate and scale down
+      const rotation = (1 - deathProgress) * Math.PI * 2; // full rotation over duration
+      const scale = 0.3 + 0.7 * deathProgress; // shrink from 100% to 30%
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation);
+      ctx.scale(scale, scale);
+      ctx.translate(-cx, -cy);
+    }
+
     // Only attempt imported sprites if they loaded with valid, non-empty frames
     try {
       if (this.importedSprites &&
           this.importedSprites.stand.frames.length >= 4 &&
           this.hasVisiblePixels(this.importedSprites.stand.frames[0]) &&
           this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
+        if (player.isDeathAnimating()) ctx.restore();
         return;
       }
     } catch {
       // Fall through to circle rendering on any error
     }
 
-    if (!player.alive) {
-      // Dead player: gray circle with X eyes
+    if (!player.alive && !player.isDeathAnimating()) {
+      // Dead player: gray circle with X eyes (static dead state — shouldn't reach here
+      // because we return early above, but kept as safety net)
       this.renderDeadPlayer(ctx, cx, cy, radius, player.index);
+      if (player.isDeathAnimating()) ctx.restore();
       return;
     }
 
     // Body circle
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = player.isDeathAnimating() ? '#666' : color;
     ctx.fill();
 
     // Dark outline
@@ -105,21 +137,41 @@ export class PlayerRenderer {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Highlight (small white circle in upper-left for 3D effect)
-    ctx.beginPath();
-    ctx.arc(cx - radius * 0.25, cy - radius * 0.25, radius * 0.25, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fill();
+    if (!player.isDeathAnimating()) {
+      // Highlight (small white circle in upper-left for 3D effect)
+      ctx.beginPath();
+      ctx.arc(cx - radius * 0.25, cy - radius * 0.25, radius * 0.25, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fill();
+    }
 
     // Player number label
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = player.isDeathAnimating() ? '#999' : '#000';
     ctx.font = `bold ${Math.floor(radius * 0.8)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(player.index + 1), cx, cy + 1);
 
-    // Facing direction indicator (small triangle)
-    this.renderFacingIndicator(ctx, cx, cy, radius, player.facing);
+    if (player.isDeathAnimating()) {
+      // Draw X eyes on the dying player
+      const eyeSize = radius * 0.2;
+      const eyeOffsetX = radius * 0.3;
+      const eyeOffsetY = radius * 0.15;
+      ctx.strokeStyle = '#C00';
+      ctx.lineWidth = 2;
+      for (const offset of [-eyeOffsetX, eyeOffsetX]) {
+        ctx.beginPath();
+        ctx.moveTo(cx + offset - eyeSize, cy - eyeOffsetY - eyeSize);
+        ctx.lineTo(cx + offset + eyeSize, cy - eyeOffsetY + eyeSize);
+        ctx.moveTo(cx + offset + eyeSize, cy - eyeOffsetY - eyeSize);
+        ctx.lineTo(cx + offset - eyeSize, cy - eyeOffsetY + eyeSize);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      // Facing direction indicator (small triangle) — only for alive players
+      this.renderFacingIndicator(ctx, cx, cy, radius, player.facing);
+    }
   }
 
   private ensureImportedSprites(): void {
@@ -177,8 +229,8 @@ export class PlayerRenderer {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     if (!player.alive) {
+      // Death animation or static dead state — grayscale the sprite
       ctx.filter = 'grayscale(1) brightness(0.7)';
-      ctx.globalAlpha = 0.9;
     } else {
       const hueShift = PLAYER_HUE_SHIFTS[player.index] ?? 0;
       if (player.index === 0 || player.index === 8) {

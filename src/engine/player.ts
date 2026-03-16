@@ -26,6 +26,8 @@ const HALF = HITBOX / 2;
 const SLIDE_THRESHOLD = 0.45;
 const SLOW_DISEASE_MULTIPLIER = 0.55;
 const CONVEYOR_SPEED = 1.4;
+/** Duration of the death animation in seconds. */
+export const DEATH_ANIM_DURATION = 1.0;
 
 function getOppositeDirection(dir: Direction): Direction {
   switch (dir) {
@@ -59,6 +61,9 @@ export class Player {
 
   /** Bomb currently being carried (grab/spooge mechanic). */
   carriedBomb: Bomb | null = null;
+
+  /** Timer for death animation. Starts at DEATH_ANIM_DURATION when die() is called, counts down to 0. */
+  deathTimer = 0;
 
   // Raw input flags
   inputUp = false;
@@ -143,7 +148,12 @@ export class Player {
     this.slowDiseaseTimer = Math.max(0, this.slowDiseaseTimer - dt);
     this.reverseDiseaseTimer = Math.max(0, this.reverseDiseaseTimer - dt);
 
-    if (!this.alive) return;
+    if (!this.alive) {
+      if (this.deathTimer > 0) {
+        this.deathTimer = Math.max(0, this.deathTimer - dt);
+      }
+      return;
+    }
 
     const dir = this.getDesiredDirection();
     this.moveDirection = dir;
@@ -407,11 +417,17 @@ export class Player {
     return this.carriedBomb !== null;
   }
 
+  /** Returns true if the death animation is still playing. */
+  isDeathAnimating(): boolean {
+    return !this.alive && this.deathTimer > 0;
+  }
+
   die(): void {
     this.alive = false;
     this.moving = false;
     this.moveDirection = 'none';
     this.activeWarpIndex = null;
+    this.deathTimer = DEATH_ANIM_DURATION;
     // Drop carried bomb at current position (it will explode via normal fuse)
     if (this.carriedBomb) {
       const { col, row } = this.getGridPos();

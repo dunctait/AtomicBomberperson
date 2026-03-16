@@ -10,6 +10,8 @@ export interface GameConfig {
   map: string;
   mapFile: string | null;
   winsRequired: number;
+  /** Round timer in seconds. When it reaches 0, sudden death begins. */
+  roundTimerSeconds: number;
 }
 
 export const gameConfig: GameConfig = {
@@ -18,6 +20,7 @@ export const gameConfig: GameConfig = {
   map: 'BASIC',
   mapFile: null,
   winsRequired: 3,
+  roundTimerSeconds: 120,
 };
 
 /** Reset config to defaults and build the player slot array. */
@@ -26,6 +29,7 @@ export function resetConfig(): void {
   gameConfig.map = 'BASIC';
   gameConfig.mapFile = null;
   gameConfig.winsRequired = 3;
+  gameConfig.roundTimerSeconds = 120;
   rebuildSlots();
 }
 

@@ -490,6 +490,13 @@ export class BombManager {
     return !!this.getLiveBombAt(col, row);
   }
 
+  /** Remove any live bomb at the given position (used by sudden death). */
+  removeAt(col: number, row: number): void {
+    this.bombs = this.bombs.filter(
+      (b) => b.exploded || b.col !== col || b.row !== row,
+    );
+  }
+
   /** Check if a position has a bomb that blocks a specific player (respects grace) */
   isBombBlocking(col: number, row: number, playerIndex: number): boolean {
     return this.bombs.some(

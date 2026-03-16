@@ -909,6 +909,37 @@ body {
   color: #93d7a5;
 }
 
+.gameplay-timer {
+  flex: 0 0 auto;
+  font-size: 0.6rem;
+  color: #53d8fb;
+  text-align: center;
+  letter-spacing: 0.1em;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #0f3460;
+  border-radius: 3px;
+  background: #16213e;
+  align-self: center;
+}
+
+.gameplay-timer--warning {
+  color: #f0b25d;
+  border-color: #f0b25d44;
+  animation: timer-pulse 1s steps(2, start) infinite;
+}
+
+.gameplay-timer--danger {
+  color: #e94560;
+  border-color: #e9456044;
+  background: #e9456015;
+  text-shadow: 0 0 6px #e9456088;
+  animation: timer-pulse 0.5s steps(2, start) infinite;
+}
+
+@keyframes timer-pulse {
+  50% { opacity: 0.6; }
+}
+
 .gameplay-controls {
   flex: 0 0 auto;
   font-size: 0.45rem;

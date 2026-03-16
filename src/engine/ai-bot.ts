@@ -80,8 +80,32 @@ export class AIBot {
     this.clearInputs();
     const pos = this.player.getGridPos();
 
+    // ── Priority 0: THROW carried bomb toward nearest enemy ───────────
+    if (this.player.isCarryingBomb()) {
+      const enemy = this.findNearestEnemy(allPlayers);
+      if (enemy) {
+        // Face toward the enemy, then throw (inputBomb triggers throw)
+        this.faceToward(pos, enemy);
+        this.player.inputBomb = true;
+      } else {
+        // No enemies — just throw in current facing direction
+        this.player.inputBomb = true;
+      }
+      this.path = [];
+      this.pathIndex = 0;
+      this.thinkTimer = 0.1;
+      return;
+    }
+
     // ── Priority 1: ESCAPE ──────────────────────────────────────────────
     if (!this.isCellSafe(pos.col, pos.row, grid, bombs)) {
+      // Grab own bomb to remove the danger source (if we have grab and are on our own bomb)
+      if (this.player.stats.canGrab && bombs.hasBomb(pos.col, pos.row)) {
+        this.player.inputBomb = true;
+        this.thinkTimer = 0.05; // Re-think quickly to throw it
+        return;
+      }
+
       const safe = this.findSafePosition(grid, bombs);
       if (safe) {
         this.path = this.findFleePath(pos.col, pos.row, safe.col, safe.row, grid, bombs);
@@ -266,7 +290,7 @@ export class AIBot {
 
   private findSafePosition(grid: GameGrid, bombs: BombManager): GridPos | null {
     const pos = this.player.getGridPos();
-    const canKick = this.player.stats.canKick;
+    const canMoveThroughBombs = this.player.stats.canKick || this.player.stats.canPunch;
     const visited = new Set<string>();
     const queue: GridPos[] = [{ col: pos.col, row: pos.row }];
     visited.add(`${pos.col},${pos.row}`);
@@ -284,8 +308,8 @@ export class AIBot {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-        // With kick, the AI can pass through bomb cells (it will kick them away)
-        const passable = grid.isWalkable(nc, nr) && (canKick || !bombs.hasBomb(nc, nr));
+        // With kick or punch, the AI can pass through bomb cells (it will kick/punch them away)
+        const passable = grid.isWalkable(nc, nr) && (canMoveThroughBombs || !bombs.hasBomb(nc, nr));
         if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
             passable) {
           visited.add(key);
@@ -429,13 +453,13 @@ export class AIBot {
     const pos = this.player.getGridPos();
     const candidates: GridPos[] = [];
 
-    const canKick = this.player.stats.canKick;
+    const canMoveThroughBombs = this.player.stats.canKick || this.player.stats.canPunch;
     for (const dir of DIRS) {
       const nc = pos.col + dir.dx;
       const nr = pos.row + dir.dy;
       if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
           grid.isWalkable(nc, nr) &&
-          (canKick || !bombs.hasBomb(nc, nr)) &&
+          (canMoveThroughBombs || !bombs.hasBomb(nc, nr)) &&
           this.isCellSafe(nc, nr, grid, bombs)) {
         candidates.push({ col: nc, row: nr });
       }
@@ -529,12 +553,13 @@ export class AIBot {
     grid: GameGrid, bombs: BombManager,
   ): GridPos[] {
     // Never walk into an active explosion.
-    // If the AI has kick, bombs in the path are not blockers (walking into them kicks them away).
-    const canKick = this.player.stats.canKick;
+    // If the AI has kick or punch, bombs in the path are not blockers
+    // (walking into them kicks/punches them away).
+    const canMoveThroughBombs = this.player.stats.canKick || this.player.stats.canPunch;
     return this.bfsPath(
       startCol, startRow, endCol, endRow, grid, bombs,
       (nc, nr) => !bombs.isExploding(nc, nr),
-      canKick, // allowBombs: kick sends bombs away, so they're passable
+      canMoveThroughBombs, // allowBombs: kick/punch sends bombs away, so they're passable
     );
   }
 
@@ -610,5 +635,40 @@ export class AIBot {
     this.player.setInput('down', false);
     this.player.setInput('left', false);
     this.player.setInput('right', false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Grab/punch helpers
+  // ---------------------------------------------------------------------------
+
+  /** Find the nearest alive enemy player. */
+  private findNearestEnemy(allPlayers: Player[]): GridPos | null {
+    const pos = this.player.getGridPos();
+    let bestDist = Infinity;
+    let best: GridPos | null = null;
+
+    for (const p of allPlayers) {
+      if (p.index === this.player.index || !p.alive) continue;
+      const ep = p.getGridPos();
+      const dist = Math.abs(ep.col - pos.col) + Math.abs(ep.row - pos.row);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = ep;
+      }
+    }
+    return best;
+  }
+
+  /** Set the player's facing direction toward a target grid position. */
+  private faceToward(from: GridPos, to: GridPos): void {
+    const dx = to.col - from.col;
+    const dy = to.row - from.row;
+
+    // Prefer the axis with the larger delta
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      this.player.facing = dx >= 0 ? 'right' : 'left';
+    } else {
+      this.player.facing = dy >= 0 ? 'down' : 'up';
+    }
   }
 }
