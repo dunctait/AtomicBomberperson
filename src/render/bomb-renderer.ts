@@ -30,8 +30,88 @@ const BOMB_ANIM_FPS_MAX = 8;
 /** Full fuse duration in seconds; must match BOMB_FUSE in bomb.ts. */
 const BOMB_FUSE_DURATION = 2.0;
 
+/** Max players we pre-tint bomb frames for */
+const MAX_PLAYERS = 10;
+
+/** Parse a hex color string like '#FF00CC' into [r, g, b] 0-255 */
+function parseHexColor(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [
+    parseInt(h.substring(0, 2), 16),
+    parseInt(h.substring(2, 4), 16),
+    parseInt(h.substring(4, 6), 16),
+  ];
+}
+
+/**
+ * Recolor a sprite frame using fpc_atomic's LoadColorTabledImage algorithm.
+ * Only pixels where green is the dominant channel get recolored to the player's
+ * color. Shadows, outlines, and highlights are left untouched.
+ *
+ * playerR/G/B are in 0-255 range; the algorithm normalises internally.
+ */
+function tintFrame(
+  source: HTMLCanvasElement,
+  playerR: number,
+  playerG: number,
+  playerB: number,
+): HTMLCanvasElement {
+  const w = source.width;
+  const h = source.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.drawImage(source, 0, 0);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+
+  // Convert 0-255 player color to 0-100 scale to match fpc_atomic's PlayerColor range
+  const pr = (playerR / 255) * 100;
+  const pg = (playerG / 255) * 100;
+  const pb = (playerB / 255) * 100;
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+
+    const sr = data[i];
+    const sg = data[i + 1];
+    const sb = data[i + 2];
+
+    // Only recolor pixels where green is the dominant channel
+    if (sg > sr && sg > sb) {
+      const n = ((sr + sb) / 2) | 0;   // base/neutral color
+      const k = sg - n;                  // extra green = colorable amount
+
+      let nr = n + ((k * pr) / 100) | 0;
+      let ng = n + ((k * pg) / 100) | 0;
+      let nb = n + ((k * pb) / 100) | 0;
+
+      // Normalize if any channel overflows
+      const m = Math.max(nr, ng, nb);
+      if (m > 255) {
+        nr = ((nr * 255) / m) | 0;
+        ng = ((ng * 255) / m) | 0;
+        nb = ((nb * 255) / m) | 0;
+      }
+
+      data[i]     = Math.min(255, nr);
+      data[i + 1] = Math.min(255, ng);
+      data[i + 2] = Math.min(255, nb);
+    }
+    // Non-green-dominant pixels are left completely untouched
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
 export class BombRenderer {
+  /** Original untinted bomb frames */
   private bombFrames: HTMLCanvasElement[] | null = null;
+  /** Per-player tinted bomb frames: tintedBombFrames[playerIndex][frameIndex] */
+  private tintedBombFrames: HTMLCanvasElement[][] | null = null;
   private flameFrames: HTMLCanvasElement[] | null = null;
   private loadStarted = false;
 
@@ -47,12 +127,23 @@ export class BombRenderer {
     void loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1).then((anim) => {
       if (anim) {
         this.bombFrames = anim.frames;
+        this.generateTintedFrames(anim.frames);
       }
     });
 
     void loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35).then((anim) => {
       if (anim) this.flameFrames = anim.frames;
     });
+  }
+
+  /** Pre-generate per-player color-tinted bomb frame sets */
+  private generateTintedFrames(frames: HTMLCanvasElement[]): void {
+    this.tintedBombFrames = [];
+    for (let p = 0; p < MAX_PLAYERS; p++) {
+      const color = PLAYER_COLORS[p] ?? '#53d8fb';
+      const [r, g, b] = parseHexColor(color);
+      this.tintedBombFrames.push(frames.map((frame) => tintFrame(frame, r, g, b)));
+    }
   }
 
   private getFuseProgress(bombTimer: number): number {
@@ -102,7 +193,7 @@ export class BombRenderer {
       const cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
       const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
-      if (this.bombFrames) {
+      if (this.tintedBombFrames) {
         this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       } else {
         this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
@@ -110,13 +201,6 @@ export class BombRenderer {
     }
   }
 
-  /**
-   * Render a bomb using the imported BOMB.ANI / BOMBS.ANI sprite frames.
-   *
-   * Frame selection combines absolute elapsed time (for continuous cycling)
-   * with the bomb's remaining fuse timer (to speed up the cycle as the bomb
-   * nears detonation, creating a "ticking" urgency effect).
-   */
   private renderImportedBomb(
     ctx: CanvasRenderingContext2D,
     cx: number,
@@ -127,12 +211,15 @@ export class BombRenderer {
     bombTimer: number,
     owner: number,
   ): void {
-    const frames = this.bombFrames!;
+    // Pick the pre-tinted frame set for this player
+    const playerFrames = this.tintedBombFrames![
+      Math.min(owner, this.tintedBombFrames!.length - 1)
+    ];
 
     const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bombTimer);
     const fps = this.getBombAnimationSpeed(bombTimer);
-    const frameIndex = Math.floor(fuseElapsed * fps) % frames.length;
-    const frame = frames[frameIndex];
+    const frameIndex = Math.floor(fuseElapsed * fps) % playerFrames.length;
+    const frame = playerFrames[frameIndex];
     // Scale bomb sprite to fit within one tile while preserving aspect ratio.
     const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
     const drawW = frame.width * scale;
@@ -140,17 +227,6 @@ export class BombRenderer {
     // Use geometric centering for bomb placement so bomb and explosion origins align.
     const drawX = cx - drawW / 2;
     const drawY = cy - drawH / 2;
-
-    // Draw a colored ownership ring under the bomb so players can tell whose is whose.
-    // The original game uses the same bomb sprite for all players.
-    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + drawH * 0.35, drawW * 0.4, drawH * 0.18, 0, 0, Math.PI * 2);
-    ctx.fillStyle = ownerColor;
-    ctx.globalAlpha = 0.5;
-    ctx.fill();
-    ctx.restore();
 
     ctx.save();
     ctx.imageSmoothingEnabled = false;
