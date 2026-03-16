@@ -26,10 +26,10 @@ export interface Powerup {
 }
 
 /**
- * Weights for powerup distribution. Higher weight = more likely to appear.
- * Common powerups (ExtraBomb, LongerFlame, Speed) are weighted higher.
+ * Default weights for powerup distribution. Higher weight = more likely to appear.
+ * These are used when the scheme does not provide override values.
  */
-const POWERUP_WEIGHTS: Record<number, number> = {
+const DEFAULT_POWERUP_WEIGHTS: Record<number, number> = {
   [PowerupType.ExtraBomb]: 5,
   [PowerupType.LongerFlame]: 5,
   [PowerupType.Disease]: 1,
@@ -45,6 +45,30 @@ const POWERUP_WEIGHTS: Record<number, number> = {
   [PowerupType.Random]: 1,
 };
 
+/** Essential powerups that are guaranteed a minimum spawn count per match */
+const ESSENTIAL_MINIMUMS: Partial<Record<PowerupType, number>> = {
+  [PowerupType.ExtraBomb]: 3,
+  [PowerupType.LongerFlame]: 3,
+  [PowerupType.Speed]: 2,
+};
+
+/** Powerup density: fraction of bricks that should contain powerups */
+const POWERUP_BRICK_RATIO = 0.35;
+
+/** Pick a random powerup type using weighted selection */
+function pickWeighted(
+  entries: { type: PowerupType; weight: number }[],
+  totalWeight: number,
+): PowerupType {
+  let roll = Math.random() * totalWeight;
+  for (const entry of entries) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.type;
+  }
+  // Fallback (should not happen with valid weights)
+  return entries[entries.length - 1].type;
+}
+
 export class PowerupManager {
   powerups: Powerup[] = [];
 
@@ -52,26 +76,34 @@ export class PowerupManager {
   generatePowerups(grid: GameGrid, schemeSettings: PowerupSetting[]): void {
     this.powerups = [];
 
-    // Build set of forbidden powerup IDs
+    // Build set of forbidden powerup IDs and scheme overrides
     const forbidden = new Set<number>();
+    const schemeWeights = new Map<number, number>();
     for (const setting of schemeSettings) {
       if (setting.forbidden) {
         forbidden.add(setting.id);
+      } else if (setting.hasOverride) {
+        // Use scheme override value as weight (0 means effectively disabled)
+        schemeWeights.set(setting.id, setting.overrideValue);
       }
     }
 
-    // Build weighted pool of allowed powerup types
-    const pool: PowerupType[] = [];
+    // Build weighted table of allowed powerup types
+    // Use scheme overrides where available, fall back to defaults
+    const weightedTypes: { type: PowerupType; weight: number }[] = [];
+    let totalWeight = 0;
     for (const typeVal of Object.values(PowerupType)) {
       if (typeof typeVal !== 'number') continue;
       if (forbidden.has(typeVal)) continue;
-      const weight = POWERUP_WEIGHTS[typeVal] ?? 1;
-      for (let i = 0; i < weight; i++) {
-        pool.push(typeVal);
-      }
+      const weight = schemeWeights.has(typeVal)
+        ? schemeWeights.get(typeVal)!
+        : (DEFAULT_POWERUP_WEIGHTS[typeVal] ?? 1);
+      if (weight <= 0) continue;
+      weightedTypes.push({ type: typeVal, weight });
+      totalWeight += weight;
     }
 
-    if (pool.length === 0) return;
+    if (weightedTypes.length === 0 || totalWeight === 0) return;
 
     // Collect all brick positions
     const brickPositions: { col: number; row: number }[] = [];
@@ -85,7 +117,8 @@ export class PowerupManager {
     }
 
     // Place powerups under ~35% of bricks
-    const powerupCount = Math.floor(brickPositions.length * 0.35);
+    const powerupCount = Math.floor(brickPositions.length * POWERUP_BRICK_RATIO);
+    if (powerupCount === 0) return;
 
     // Shuffle brick positions (Fisher-Yates)
     for (let i = brickPositions.length - 1; i > 0; i--) {
@@ -93,10 +126,29 @@ export class PowerupManager {
       [brickPositions[i], brickPositions[j]] = [brickPositions[j], brickPositions[i]];
     }
 
-    // Assign powerups to the first N brick positions
-    for (let i = 0; i < powerupCount && i < brickPositions.length; i++) {
+    // Phase 1: Place guaranteed minimum essential powerups first
+    let placed = 0;
+    for (const [essentialType, minCount] of Object.entries(ESSENTIAL_MINIMUMS)) {
+      const typeNum = Number(essentialType) as PowerupType;
+      if (forbidden.has(typeNum)) continue;
+      // Check this type exists in our weighted table
+      if (!weightedTypes.some((wt) => wt.type === typeNum)) continue;
+      for (let i = 0; i < minCount! && placed < powerupCount; i++) {
+        const pos = brickPositions[placed];
+        this.powerups.push({
+          col: pos.col,
+          row: pos.row,
+          type: typeNum,
+          revealed: false,
+        });
+        placed++;
+      }
+    }
+
+    // Phase 2: Fill remaining slots with weighted random selection
+    for (let i = placed; i < powerupCount && i < brickPositions.length; i++) {
       const pos = brickPositions[i];
-      const type = pool[Math.floor(Math.random() * pool.length)];
+      const type = pickWeighted(weightedTypes, totalWeight);
       this.powerups.push({
         col: pos.col,
         row: pos.row,

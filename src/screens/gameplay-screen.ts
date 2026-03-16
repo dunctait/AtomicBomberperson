@@ -572,7 +572,7 @@ export function createGameplayScreen(
 
       // Create AI controller for AI players
       if (configPlayers[i].type === 'ai') {
-        aiBots.push(new AIBot(player));
+        aiBots.push(new AIBot(player, gameConfig.aiDifficulty));
       }
     }
 
@@ -844,7 +844,7 @@ export function createGameplayScreen(
 
     const controls = document.createElement('span');
     controls.className = 'gameplay-controls';
-    controls.textContent = 'Arrows: move | SPACE: bomb | ESC: quit';
+    controls.textContent = 'P1: Arrows+SPACE | P2: WASD+E/Shift | ESC: quit';
 
     root.append(mapMeta, hudTimerEl, controls);
     return { root, mapName, mapSource, ...hudSummaries };

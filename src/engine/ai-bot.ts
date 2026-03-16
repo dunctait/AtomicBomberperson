@@ -2,6 +2,7 @@ import { Player } from './player';
 import { GameGrid, CellContent, GRID_COLS, GRID_ROWS } from './game-grid';
 import { BombManager } from './bomb';
 import { PowerupManager } from './powerup';
+import type { AIDifficulty } from '../screens/game-config';
 
 /**
  * AI Bot modelled after fpc_atomic's approach:
@@ -14,6 +15,9 @@ import { PowerupManager } from './powerup';
  *   Before placing a bomb, build the full danger map *including* the
  *   hypothetical new bomb, then BFS-verify that at least one reachable
  *   cell is survivable.  This prevents self-kills.
+ *
+ * Difficulty levels modify think interval, bomb cooldown, safety behavior,
+ * and explosion reaction timing.
  */
 
 type AIGoal = 'flee' | 'seek-powerup' | 'attack' | 'wander';
@@ -30,32 +34,88 @@ const DIRS: { dx: number; dy: number }[] = [
   { dx: 1, dy: 0 },
 ];
 
-const THINK_INTERVAL_BASE = 0.3;
-const THINK_INTERVAL_JITTER = 0.2;
+/** Difficulty-dependent constants keyed by AIDifficulty. */
+const DIFFICULTY_SETTINGS: Record<AIDifficulty, {
+  thinkIntervalBase: number;
+  thinkIntervalJitter: number;
+  bombCooldownDefault: number;
+  bombCooldownWithKick: number;
+  /** Chance (0-1) of ignoring danger when navigating (Easy walks into danger sometimes). */
+  dangerIgnoreChance: number;
+  /** Delay before fleeing (seconds). 0 = instant, >0 = delayed reaction. */
+  fleeDelay: number;
+  /** If true, bot preemptively flees when standing in blast range even before feeling unsafe. */
+  preemptiveFlee: boolean;
+  /** Attack search depth for BFS. */
+  attackSearchDepth: number;
+  /** Enemy hit score bonus for attack targeting. */
+  enemyHitScoreBonus: number;
+}> = {
+  easy: {
+    thinkIntervalBase: 0.5,
+    thinkIntervalJitter: 0.3,
+    bombCooldownDefault: 2.5,
+    bombCooldownWithKick: 1.5,
+    dangerIgnoreChance: 0.3,
+    fleeDelay: 0.3,
+    preemptiveFlee: false,
+    attackSearchDepth: 6,
+    enemyHitScoreBonus: 2,
+  },
+  normal: {
+    thinkIntervalBase: 0.3,
+    thinkIntervalJitter: 0.2,
+    bombCooldownDefault: 1.5,
+    bombCooldownWithKick: 0.8,
+    dangerIgnoreChance: 0,
+    fleeDelay: 0,
+    preemptiveFlee: false,
+    attackSearchDepth: 8,
+    enemyHitScoreBonus: 3,
+  },
+  hard: {
+    thinkIntervalBase: 0.15,
+    thinkIntervalJitter: 0.1,
+    bombCooldownDefault: 0.8,
+    bombCooldownWithKick: 0.4,
+    dangerIgnoreChance: 0,
+    fleeDelay: 0,
+    preemptiveFlee: true,
+    attackSearchDepth: 12,
+    enemyHitScoreBonus: 5,
+  },
+};
+
 const THINK_QUICK_RETHINK = 0.05;
 const THINK_THROW_DELAY = 0.1;
-const BOMB_COOLDOWN_WITH_KICK = 0.8;
-const BOMB_COOLDOWN_DEFAULT = 1.5;
-const ATTACK_SEARCH_DEPTH = 8;
-const ENEMY_HIT_SCORE_BONUS = 3;
 const NAV_ARRIVAL_THRESHOLD = 0.15;
 const NAV_DIRECTION_DEADZONE = 0.05;
 
 export class AIBot {
   player: Player;
+  private difficulty: AIDifficulty;
   private thinkTimer: number;
   private currentGoal: AIGoal;
   private path: GridPos[];
   private pathIndex: number;
   private bombCooldown: number;
+  /** Accumulated flee delay timer (Easy bots hesitate before fleeing). */
+  private fleeDelayTimer: number;
 
-  constructor(player: Player) {
+  constructor(player: Player, difficulty: AIDifficulty = 'normal') {
     this.player = player;
-    this.thinkTimer = Math.random() * THINK_INTERVAL_BASE;
+    this.difficulty = difficulty;
+    const settings = DIFFICULTY_SETTINGS[this.difficulty];
+    this.thinkTimer = Math.random() * settings.thinkIntervalBase;
     this.currentGoal = 'wander';
     this.path = [];
     this.pathIndex = 0;
     this.bombCooldown = 0;
+    this.fleeDelayTimer = 0;
+  }
+
+  private get settings() {
+    return DIFFICULTY_SETTINGS[this.difficulty];
   }
 
   update(
@@ -72,7 +132,7 @@ export class AIBot {
 
     if (this.thinkTimer <= 0) {
       this.think(grid, bombs, powerups, allPlayers);
-      this.thinkTimer = THINK_INTERVAL_BASE + Math.random() * THINK_INTERVAL_JITTER;
+      this.thinkTimer = this.settings.thinkIntervalBase + Math.random() * this.settings.thinkIntervalJitter;
     }
 
     this.navigatePath(grid, bombs);
@@ -109,21 +169,36 @@ export class AIBot {
     }
 
     // ── Priority 1: ESCAPE ──────────────────────────────────────────────
-    if (!this.isCellSafe(pos.col, pos.row, grid, bombs)) {
-      // Grab own bomb to remove the danger source (if we have grab and are on our own bomb)
-      if (this.player.stats.canGrab && bombs.hasBomb(pos.col, pos.row)) {
-        this.player.inputBomb = true;
-        this.thinkTimer = THINK_QUICK_RETHINK; // Re-think quickly to throw it
-        return;
-      }
+    // Hard bots preemptively flee: check if in any bomb's blast range even
+    // before the cell is considered "unsafe" by normal standards.
+    const inDanger = !this.isCellSafe(pos.col, pos.row, grid, bombs);
+    const shouldFlee = inDanger || (this.settings.preemptiveFlee && this.isInBlastRange(pos.col, pos.row, grid, bombs));
 
-      const safe = this.findSafePosition(grid, bombs);
-      if (safe) {
-        this.path = this.findFleePath(pos.col, pos.row, safe.col, safe.row, grid, bombs);
-        this.pathIndex = 0;
-        this.currentGoal = 'flee';
-        return;
+    if (shouldFlee) {
+      // Easy bots have a delayed flee response
+      if (this.settings.fleeDelay > 0 && this.fleeDelayTimer < this.settings.fleeDelay) {
+        this.fleeDelayTimer += this.settings.thinkIntervalBase;
+        // Don't flee yet — continue with lower-priority goals
+      } else {
+        this.fleeDelayTimer = 0;
+
+        // Grab own bomb to remove the danger source (if we have grab and are on our own bomb)
+        if (this.player.stats.canGrab && bombs.hasBomb(pos.col, pos.row)) {
+          this.player.inputBomb = true;
+          this.thinkTimer = THINK_QUICK_RETHINK; // Re-think quickly to throw it
+          return;
+        }
+
+        const safe = this.findSafePosition(grid, bombs);
+        if (safe) {
+          this.path = this.findFleePath(pos.col, pos.row, safe.col, safe.row, grid, bombs);
+          this.pathIndex = 0;
+          this.currentGoal = 'flee';
+          return;
+        }
       }
+    } else {
+      this.fleeDelayTimer = 0;
     }
 
     // ── Priority 2: SEEK POWERUP ────────────────────────────────────────
@@ -148,7 +223,7 @@ export class AIBot {
             this.isCellSafe(pos.col, pos.row, grid, bombs) &&
             this.simPlaceBombIsSafe(pos.col, pos.row, grid, bombs)) {
           this.player.inputBomb = true;
-          this.bombCooldown = this.player.stats.canKick ? BOMB_COOLDOWN_WITH_KICK : BOMB_COOLDOWN_DEFAULT;
+          this.bombCooldown = this.player.stats.canKick ? this.settings.bombCooldownWithKick : this.settings.bombCooldownDefault;
           // Re-think quickly to flee
           this.thinkTimer = THINK_QUICK_RETHINK;
           return;
@@ -295,6 +370,30 @@ export class AIBot {
     return true;
   }
 
+  /**
+   * Check if a cell is within any bomb's blast range (used by Hard bots for
+   * preemptive fleeing). Unlike isCellSafe, this returns true even for bombs
+   * that haven't started their fuse countdown — the Hard bot anticipates.
+   */
+  private isInBlastRange(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
+    for (const bomb of bombs.bombs) {
+      if (bomb.exploded) continue;
+      if (bomb.col === col && bomb.row === row) return true;
+
+      for (const dir of DIRS) {
+        for (let i = 1; i <= bomb.range; i++) {
+          const c = bomb.col + dir.dx * i;
+          const r = bomb.row + dir.dy * i;
+          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
+          const cell = grid.getCell(c, r);
+          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
+          if (c === col && r === row) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // ---------------------------------------------------------------------------
   // Escape
   // ---------------------------------------------------------------------------
@@ -381,7 +480,7 @@ export class AIBot {
       const current = queue.shift()!;
 
       // Don't search too far
-      if (current.dist > ATTACK_SEARCH_DEPTH) continue;
+      if (current.dist > this.settings.attackSearchDepth) continue;
 
       // Score this tile
       const brickCount = this.countBricksHit(current.col, current.row, range, grid);
@@ -389,7 +488,7 @@ export class AIBot {
 
       if (brickCount > 0 || enemyNear) {
         // Score: bricks destroyed, biased by closeness (fpc_atomic picks max bricks, closest)
-        const score = (brickCount + (enemyNear ? ENEMY_HIT_SCORE_BONUS : 0)) * 10 - current.dist;
+        const score = (brickCount + (enemyNear ? this.settings.enemyHitScoreBonus : 0)) * 10 - current.dist;
         if (score > bestScore) {
           bestScore = score;
           bestTarget = { col: current.col, row: current.row };
@@ -468,10 +567,12 @@ export class AIBot {
     for (const dir of DIRS) {
       const nc = pos.col + dir.dx;
       const nr = pos.row + dir.dy;
+      const safe = this.isCellSafe(nc, nr, grid, bombs);
+      const ignoreDanger = !safe && this.settings.dangerIgnoreChance > 0 && Math.random() < this.settings.dangerIgnoreChance;
       if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
           grid.isWalkable(nc, nr) &&
           (canMoveThroughBombs || !bombs.hasBomb(nc, nr)) &&
-          this.isCellSafe(nc, nr, grid, bombs)) {
+          (safe || ignoreDanger)) {
         candidates.push({ col: nc, row: nr });
       }
     }
@@ -587,11 +688,14 @@ export class AIBot {
 
     // Safety check: if the next waypoint is dangerous and we're NOT fleeing,
     // abort the path and force an immediate re-think.
+    // Easy bots sometimes ignore danger (dangerIgnoreChance).
     if (this.currentGoal !== 'flee' && !this.isCellSafe(target.col, target.row, grid, bombs)) {
-      this.path = [];
-      this.pathIndex = 0;
-      this.thinkTimer = 0; // re-think next frame
-      return;
+      if (this.settings.dangerIgnoreChance <= 0 || Math.random() >= this.settings.dangerIgnoreChance) {
+        this.path = [];
+        this.pathIndex = 0;
+        this.thinkTimer = 0; // re-think next frame
+        return;
+      }
     }
 
     // Even when fleeing, if we're about to step into an active explosion, stop

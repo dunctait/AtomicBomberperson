@@ -4,6 +4,7 @@ import {
   gameConfig,
   rebuildSlots,
   resetConfig,
+  AI_DIFFICULTY_OPTIONS,
   type PlayerType,
 } from './game-config';
 import { mountVirtualStage, type VirtualStageElements } from '../ui/virtual-stage';
@@ -298,6 +299,30 @@ export function createGameSetup(
         onNext: () => {
           if (effectiveDensityIndex < BRICK_DENSITY_OPTIONS.length - 1) {
             gameConfig.brickDensityOverride = BRICK_DENSITY_OPTIONS[effectiveDensityIndex + 1];
+            render(container);
+          }
+        },
+      }),
+    );
+
+    // --- AI Difficulty stepper ---
+    const difficultyIndex = AI_DIFFICULTY_OPTIONS.indexOf(gameConfig.aiDifficulty);
+    const effectiveDifficultyIndex = difficultyIndex === -1 ? 1 : difficultyIndex; // default to 'normal' (index 1)
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'AI DIFFICULTY',
+        value: gameConfig.aiDifficulty.toUpperCase(),
+        previousDisabled: effectiveDifficultyIndex <= 0,
+        nextDisabled: effectiveDifficultyIndex >= AI_DIFFICULTY_OPTIONS.length - 1,
+        onPrevious: () => {
+          if (effectiveDifficultyIndex > 0) {
+            gameConfig.aiDifficulty = AI_DIFFICULTY_OPTIONS[effectiveDifficultyIndex - 1];
+            render(container);
+          }
+        },
+        onNext: () => {
+          if (effectiveDifficultyIndex < AI_DIFFICULTY_OPTIONS.length - 1) {
+            gameConfig.aiDifficulty = AI_DIFFICULTY_OPTIONS[effectiveDifficultyIndex + 1];
             render(container);
           }
         },

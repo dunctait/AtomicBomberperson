@@ -6,11 +6,13 @@ export interface KeyBindings {
   left: string;
   right: string;
   bomb: string;
+  /** Optional alternate bomb key (e.g. Shift as alternative to E). */
+  bombAlt?: string;
 }
 
 export const DEFAULT_BINDINGS: KeyBindings[] = [
   { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bomb: ' ' },
-  { up: 'w', down: 's', left: 'a', right: 'd', bomb: 'q' },
+  { up: 'w', down: 's', left: 'a', right: 'd', bomb: 'e', bombAlt: 'Shift' },
 ];
 
 export class InputManager {
@@ -43,6 +45,7 @@ export class InputManager {
       if (key === binding.left)  { player.setInput('left', pressed); return; }
       if (key === binding.right) { player.setInput('right', pressed); return; }
       if (key === binding.bomb)  { player.setInput('bomb', pressed); return; }
+      if (binding.bombAlt && key === binding.bombAlt) { player.setInput('bomb', pressed); return; }
     }
   }
 }
