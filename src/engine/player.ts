@@ -316,10 +316,10 @@ export class Player {
 
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
-        // Out-of-bounds cells are treated as passable — edge maps (e.g. BASIC)
-        // have no border walls and spawns sit at grid corners.
+        // Out-of-bounds cells are treated as impassable — the grid boundary
+        // acts as an invisible wall, preventing players from walking off-grid.
         if (c < 0 || r < 0 || c >= grid.cells[0]?.length || r >= grid.cells.length) {
-          continue;
+          return false;
         }
         if (!grid.isWalkable(c, r)) {
           return false;

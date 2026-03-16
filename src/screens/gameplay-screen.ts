@@ -750,14 +750,6 @@ export function createGameplayScreen(
         if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange, p.stats.hasJelly)) {
           p.stats.activeBombs++;
           soundManager.play('BOMBDROP.WAV');
-          const cellType = gameGrid.getCell(col, row)?.type ?? '?';
-          const neighbors = ['up', 'down', 'left', 'right'].map((d) => {
-            const nc = d === 'left' ? col - 1 : d === 'right' ? col + 1 : col;
-            const nr = d === 'up' ? row - 1 : d === 'down' ? row + 1 : row;
-            const t = gameGrid.getCell(nc, nr)?.type ?? -1;
-            return `${d}:${t === 0 ? '.' : t === 1 ? 'W' : t === 2 ? 'B' : '?'}`;
-          }).join(' ');
-          console.log(`[BOMB] P${p.index}(${p.type}) grid(${col},${row}) cell=${cellType} pos(${p.x.toFixed(2)},${p.y.toFixed(2)}) ${neighbors}`);
         }
       }
 

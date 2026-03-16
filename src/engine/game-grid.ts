@@ -94,6 +94,17 @@ export class GameGrid {
       }
     }
 
+    // Enforce border walls — the perimeter of the grid is always solid
+    // regardless of what the scheme defines, matching original game behavior.
+    for (let c = 0; c < GRID_COLS; c++) {
+      this.cells[0][c].type = CellContent.Solid;
+      this.cells[GRID_ROWS - 1][c].type = CellContent.Solid;
+    }
+    for (let r = 0; r < GRID_ROWS; r++) {
+      this.cells[r][0].type = CellContent.Solid;
+      this.cells[r][GRID_COLS - 1].type = CellContent.Solid;
+    }
+
     // Clear spawn areas after placing bricks
     this.clearSpawnAreas(scheme.spawns);
   }

@@ -113,6 +113,8 @@ export class BombRenderer {
   /** Per-player tinted bomb frames: tintedBombFrames[playerIndex][frameIndex] */
   private tintedBombFrames: HTMLCanvasElement[][] | null = null;
   private flameFrames: HTMLCanvasElement[] | null = null;
+  /** Per-player tinted flame frames: tintedFlameFrames[playerIndex][frameIndex] */
+  private tintedFlameFrames: HTMLCanvasElement[][] | null = null;
   private loadStarted = false;
 
   constructor() {
@@ -132,7 +134,10 @@ export class BombRenderer {
     });
 
     void loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35).then((anim) => {
-      if (anim) this.flameFrames = anim.frames;
+      if (anim) {
+        this.flameFrames = anim.frames;
+        this.generateTintedFlameFrames(anim.frames);
+      }
     });
   }
 
@@ -143,6 +148,16 @@ export class BombRenderer {
       const color = PLAYER_COLORS[p] ?? '#53d8fb';
       const [r, g, b] = parseHexColor(color);
       this.tintedBombFrames.push(frames.map((frame) => tintFrame(frame, r, g, b)));
+    }
+  }
+
+  /** Pre-generate per-player color-tinted flame frame sets */
+  private generateTintedFlameFrames(frames: HTMLCanvasElement[]): void {
+    this.tintedFlameFrames = [];
+    for (let p = 0; p < MAX_PLAYERS; p++) {
+      const color = PLAYER_COLORS[p] ?? '#53d8fb';
+      const [r, g, b] = parseHexColor(color);
+      this.tintedFlameFrames.push(frames.map((frame) => tintFrame(frame, r, g, b)));
     }
   }
 
@@ -312,7 +327,9 @@ export class BombRenderer {
     tileH: number,
     exp: Explosion,
   ): void {
-    const frames = this.flameFrames!;
+    // Use per-player tinted frames if available, otherwise fall back to untinted
+    const playerIndex = Math.min(exp.owner, (this.tintedFlameFrames?.length ?? 1) - 1);
+    const frames = this.tintedFlameFrames?.[playerIndex] ?? this.flameFrames!;
     const baseIndex = this.getExplosionBaseFrame(exp);
 
     const progress = 1 - (exp.timer / EXPLOSION_DURATION);
@@ -338,6 +355,8 @@ export class BombRenderer {
     exp: Explosion,
   ): void {
     const intensity = exp.timer / EXPLOSION_DURATION;
+    const color = PLAYER_COLORS[exp.owner] ?? '#FF8000';
+    const [pr, pg, pb] = parseHexColor(color);
 
     if (exp.direction === 'center') {
       const gradient = ctx.createRadialGradient(
@@ -349,8 +368,8 @@ export class BombRenderer {
         tileW * 0.5,
       );
       gradient.addColorStop(0, `rgba(255, 255, 200, ${intensity})`);
-      gradient.addColorStop(0.5, `rgba(255, 200, 50, ${intensity})`);
-      gradient.addColorStop(1, `rgba(255, 80, 0, ${intensity * 0.8})`);
+      gradient.addColorStop(0.5, `rgba(${pr}, ${pg}, ${pb}, ${intensity})`);
+      gradient.addColorStop(1, `rgba(${pr * 0.6 | 0}, ${pg * 0.3 | 0}, ${pb * 0.3 | 0}, ${intensity * 0.8})`);
       ctx.fillStyle = gradient;
     } else {
       const gradient = ctx.createRadialGradient(
@@ -361,16 +380,16 @@ export class BombRenderer {
         y + tileH / 2,
         tileW * 0.5,
       );
-      gradient.addColorStop(0, `rgba(255, 220, 50, ${intensity})`);
-      gradient.addColorStop(0.6, `rgba(255, 120, 0, ${intensity * 0.9})`);
-      gradient.addColorStop(1, `rgba(200, 30, 0, ${intensity * 0.7})`);
+      gradient.addColorStop(0, `rgba(255, 255, 200, ${intensity})`);
+      gradient.addColorStop(0.6, `rgba(${pr}, ${pg}, ${pb}, ${intensity * 0.9})`);
+      gradient.addColorStop(1, `rgba(${pr * 0.5 | 0}, ${pg * 0.2 | 0}, ${pb * 0.2 | 0}, ${intensity * 0.7})`);
       ctx.fillStyle = gradient;
     }
 
     const margin = 2;
     ctx.fillRect(x + margin, y + margin, tileW - margin * 2, tileH - margin * 2);
 
-    ctx.fillStyle = `rgba(255, 255, 180, ${intensity * 0.6})`;
+    ctx.fillStyle = `rgba(${pr}, ${pg}, ${pb}, ${intensity * 0.6})`;
     if (exp.direction === 'left' || exp.direction === 'right' || exp.direction === 'center') {
       ctx.fillRect(x + margin, y + tileH * 0.3, tileW - margin * 2, tileH * 0.4);
     }

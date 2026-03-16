@@ -30,6 +30,7 @@ export interface Explosion {
   timer: number;       // seconds remaining for the visual (starts at 0.5)
   direction: 'center' | 'up' | 'down' | 'left' | 'right';
   isEnd: boolean;      // true if this is the tip of the flame
+  owner: number;       // player index who owns the bomb that caused this
 }
 
 export interface BombEvents {
@@ -425,6 +426,7 @@ export class BombManager {
       timer: EXPLOSION_DURATION,
       direction: 'center',
       isEnd: false,
+      owner: bomb.owner,
     });
     events.explosionPositions.push({ col: bomb.col, row: bomb.row });
 
@@ -455,6 +457,7 @@ export class BombManager {
             timer: EXPLOSION_DURATION,
             direction: dir.name,
             isEnd: true,
+            owner: bomb.owner,
           });
           events.explosionPositions.push({ col: c, row: r });
           break;
@@ -467,6 +470,7 @@ export class BombManager {
           timer: EXPLOSION_DURATION,
           direction: dir.name,
           isEnd,
+          owner: bomb.owner,
         });
         events.explosionPositions.push({ col: c, row: r });
 
