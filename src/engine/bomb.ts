@@ -96,7 +96,6 @@ export class BombManager {
       return false;
     }
 
-    console.log(`[BOMB-MOVE] PLACE P${owner} bomb at (${col},${row})`);
     this.bombs.push({
       col,
       row,
@@ -206,7 +205,6 @@ export class BombManager {
     // Only start sliding if the very next cell is clear
     if (!this.isCellClearForSlide(nextCol, nextRow, grid)) return false;
 
-    console.log(`[BOMB-MOVE] KICK P${bomb.owner} bomb (${col},${row}) dir=${direction}`);
     this.startSliding(bomb, direction, 'kick', 6);
     return true;
   }
@@ -230,7 +228,6 @@ export class BombManager {
     const landing = this.findArcLanding(col, row, direction, grid);
     if (!landing) return false;
 
-    console.log(`[BOMB-MOVE] PUNCH P${bomb.owner} bomb (${col},${row})→(${landing.col},${landing.row}) dir=${direction}`);
     bomb.col = landing.col;
     bomb.row = landing.row;
     bomb.graceOwner = null;
@@ -364,7 +361,6 @@ export class BombManager {
       return;
     }
 
-    console.log(`[BOMB-MOVE] WARP P${bomb.owner} bomb (${bomb.col},${bomb.row})→(${destination.x},${destination.y}) warp=${warp.index}→${destination.index}`);
     bomb.col = destination.x;
     bomb.row = destination.y;
     bomb.lastWarpIndex = destination.index;
@@ -545,7 +541,6 @@ export class BombManager {
     const landing = this.findArcLanding(originCol, originRow, direction, grid);
 
     if (landing) {
-      console.log(`[BOMB-MOVE] THROW P${bomb.owner} bomb (${originCol},${originRow})→(${landing.col},${landing.row})`);
       bomb.col = landing.col;
       bomb.row = landing.row;
     } else {
