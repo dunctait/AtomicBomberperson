@@ -717,31 +717,27 @@ export function createGameplayScreen(
 
       recountActiveBombsForPlayer(p);
 
-      // --- Grab / throw logic (human players only) ---
-      // AI bots never use grab/throw — they don't understand the mechanic
-      // and would accidentally grab their own freshly-placed bombs.
-      if (p.type === 'human') {
-        // If player is carrying a bomb, pressing bomb throws it
-        if (p.isCarryingBomb()) {
-          const { col, row } = p.getGridPos();
-          const facing = p.facing !== 'none' ? p.facing : 'down';
-          bombManager.throwBomb(p.carriedBomb!, col, row, facing as 'up' | 'down' | 'left' | 'right', gameGrid);
-          p.carriedBomb = null;
-          soundManager.play('BOMBDROP.WAV');
-          p.inputBomb = false;
-          continue;
-        }
+      // --- Grab / throw logic ---
+      // If player is carrying a bomb, pressing bomb throws it
+      if (p.isCarryingBomb()) {
+        const { col, row } = p.getGridPos();
+        const facing = p.facing !== 'none' ? p.facing : 'down';
+        bombManager.throwBomb(p.carriedBomb!, col, row, facing as 'up' | 'down' | 'left' | 'right', gameGrid);
+        p.carriedBomb = null;
+        soundManager.play('BOMBDROP.WAV');
+        p.inputBomb = false;
+        continue;
+      }
 
-        // If player has grab and is standing on their own bomb, pick it up
-        if (p.stats.canGrab) {
-          const { col, row } = p.getGridPos();
-          if (bombManager.hasBomb(col, row)) {
-            const grabbed = bombManager.grabBomb(col, row, p.index);
-            if (grabbed) {
-              p.carriedBomb = grabbed;
-              p.inputBomb = false;
-              continue;
-            }
+      // If player has grab and is standing on their own bomb, pick it up
+      if (p.stats.canGrab) {
+        const { col, row } = p.getGridPos();
+        if (bombManager.hasBomb(col, row)) {
+          const grabbed = bombManager.grabBomb(col, row, p.index);
+          if (grabbed) {
+            p.carriedBomb = grabbed;
+            p.inputBomb = false;
+            continue;
           }
         }
       }

@@ -141,7 +141,10 @@ export function createGameSetup(
 
       availableMaps = nextMaps.length > 0 ? nextMaps : [{ label: 'BASIC', file: null }];
       if (!availableMaps.some((map) => map.file === gameConfig.mapFile && map.label === gameConfig.map)) {
-        setSelectedMap(availableMaps[0]);
+        // Try matching by label alone (handles default 'BASIC' with null mapFile
+        // when the imported list has BASIC.SCH with a real file path)
+        const labelMatch = availableMaps.find((map) => map.label === gameConfig.map);
+        setSelectedMap(labelMatch ?? availableMaps[0]);
       }
       render(container);
     } catch {
