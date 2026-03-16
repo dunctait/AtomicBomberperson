@@ -1334,33 +1334,91 @@ function makeGrid(gridSpec, opts = {}) {
   });
 }
 
+/**
+ * Parse an ASCII grid into a 2D array for makeGrid.
+ * Characters: . = empty, W = solid wall, B = brick
+ * Each row is one line; rows are separated by newlines.
+ * Leading/trailing blank lines are stripped. Each row is padded/trimmed to 15 cols.
+ * Grid is always 11 rows (short grids are padded with empty rows).
+ */
+function parseAsciiGrid(ascii) {
+  const CHAR_MAP = { '.': 0, 'W': 1, 'B': 2 };
+  const lines = ascii.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  const grid = [];
+  for (let r = 0; r < 11; r++) {
+    const row = [];
+    const line = lines[r] ?? '';
+    for (let c = 0; c < 15; c++) {
+      row.push(CHAR_MAP[line[c]] ?? 0);
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+/** Tick bombs until a condition is met or maxSeconds elapses. Returns true if condition was met. */
+function tickBombsUntil(condition, bombs, grid, maxSeconds = 5) {
+  const dt = 1 / 60;
+  let elapsed = 0;
+  while (elapsed < maxSeconds) {
+    bombs.update(dt, grid);
+    elapsed += dt;
+    if (condition()) return true;
+  }
+  return false;
+}
+
+// -- Coordinate math tests --
+
 function testGetGridPosMatchesCollisionDetection() {
   // getGridPos must agree with collision detection for all player positions.
   // The collision formula is: Math.floor(pos - HALF + 0.5) = Math.floor(pos + 0.2)
-  const grid = makeGrid();
-  const bombs = new BombManager();
+  // Sweep all integer and half-integer positions across the full grid.
+  const fractOffsets = [-0.49, -0.2, 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.79, 0.8, 0.9];
 
-  // Test a range of fractional positions
-  const testPositions = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
-    1.0, 1.5, 2.0, 2.3, 2.5, 2.7, 3.0, 3.5, 4.0, 5.5, 7.0, 7.9, 10.0];
-
-  for (const px of testPositions) {
-    for (const py of testPositions) {
-      if (px >= 15 || py >= 11) continue;
-      const player = new Player(0, 'human', px, py);
-      const { col, row } = player.getGridPos();
-      const expectedCol = Math.floor(px + 0.2);
-      const expectedRow = Math.floor(py + 0.2);
-      assert.equal(col, expectedCol,
-        `getGridPos col mismatch at x=${px}: got ${col}, expected ${expectedCol}`);
-      assert.equal(row, expectedRow,
-        `getGridPos row mismatch at y=${py}: got ${row}, expected ${expectedRow}`);
+  for (let col = 0; col < 15; col++) {
+    for (let row = 0; row < 11; row++) {
+      for (const frac of fractOffsets) {
+        const px = col + frac;
+        const py = row + frac;
+        if (px < 0 || py < 0 || px >= 15 || py >= 11) continue;
+        const player = new Player(0, 'human', px, py);
+        const pos = player.getGridPos();
+        const expectedCol = Math.floor(px + 0.2);
+        const expectedRow = Math.floor(py + 0.2);
+        assert.equal(pos.col, expectedCol,
+          `getGridPos col mismatch at x=${px}: got ${pos.col}, expected ${expectedCol}`);
+        assert.equal(pos.row, expectedRow,
+          `getGridPos row mismatch at y=${py}: got ${pos.row}, expected ${expectedRow}`);
+      }
     }
   }
 }
 
+function testGetGridPosAtGridEdges() {
+  // Verify positions at the far edges of the 15x11 grid
+  const edgeCases = [
+    { x: 0, y: 0, eCol: 0, eRow: 0 },
+    { x: 14, y: 10, eCol: 14, eRow: 10 },
+    { x: 13.8, y: 9.8, eCol: 13, eRow: 9 },    // floor(13.8+0.2) = floor(14.0) = 14? No: 14. Actually floor(14.0) = 14
+    { x: 14.0, y: 10.0, eCol: 14, eRow: 10 },
+    { x: 0.1, y: 0.1, eCol: 0, eRow: 0 },
+  ];
+  // Correct 13.8: floor(13.8 + 0.2) = floor(14.0) = 14
+  edgeCases[2].eCol = 14;
+  edgeCases[2].eRow = 10;
+
+  for (const { x, y, eCol, eRow } of edgeCases) {
+    const player = new Player(0, 'human', x, y);
+    const { col, row } = player.getGridPos();
+    assert.equal(col, eCol, `edge x=${x}: expected col ${eCol}, got ${col}`);
+    assert.equal(row, eRow, `edge y=${y}: expected row ${eRow}, got ${row}`);
+  }
+}
+
+// -- Bomb placement tests --
+
 function testBombPlacedAtPlayerCell() {
-  // Bomb must always appear in the same cell the player occupies.
   const grid = makeGrid(null, {
     spawns: [{ player: 0, x: 3, y: 3, team: 0 }],
   });
@@ -1382,47 +1440,48 @@ function testBombPlacedAtPlayerCell() {
 
 function testBombPlacedAtPlayerCellBoundary() {
   // The critical case: x=3.5 where Math.round would give 4 but floor(x+0.2) gives 3
-  const grid = makeGrid();
-  const bombs = new BombManager();
-
   const player = new Player(0, 'human', 3.5, 5.5);
   const { col, row } = player.getGridPos();
-  // floor(3.5 + 0.2) = floor(3.7) = 3
   assert.equal(col, 3, 'x=3.5 must map to col 3, not 4');
   assert.equal(row, 5, 'y=5.5 must map to row 5, not 6');
 }
 
-function testBombCannotPlaceThroughWalls() {
-  // Build a grid with a solid wall at col 5
-  const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
-  gridSpec[3][5] = 1; // solid wall
-  const grid = makeGrid(gridSpec);
+function testBombNotPlacedOnExistingBomb() {
   const bombs = new BombManager();
-
-  // Player at (4, 3) — wall at (5, 3)
-  const player = new Player(0, 'human', 4, 3);
-  const { col, row } = player.getGridPos();
-  assert.equal(col, 4);
-  assert.equal(row, 3);
-  // Bomb should be at player cell, not beyond the wall
-  bombs.placeBomb(col, row, 0, 2);
-  assert.equal(bombs.bombs[0].col, 4);
-  assert.equal(bombs.bombs[0].row, 3);
+  assert.ok(bombs.placeBomb(3, 3, 0, 2), 'first bomb places OK');
+  assert.ok(!bombs.placeBomb(3, 3, 1, 2), 'second bomb at same cell should fail');
 }
 
+function testBombPlacementAtGridCorners() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  assert.ok(bombs.placeBomb(0, 0, 0, 2), 'bomb at top-left corner');
+  assert.ok(bombs.placeBomb(14, 0, 0, 2), 'bomb at top-right corner');
+  assert.ok(bombs.placeBomb(0, 10, 0, 2), 'bomb at bottom-left corner');
+  assert.ok(bombs.placeBomb(14, 10, 0, 2), 'bomb at bottom-right corner');
+
+  // Detonate corner bomb and verify no out-of-bounds explosions
+  bombs.bombs[0].timer = 0;
+  bombs.update(0.01, grid);
+  for (const exp of bombs.explosions) {
+    assert.ok(exp.col >= 0 && exp.col < 15, `explosion col ${exp.col} out of bounds`);
+    assert.ok(exp.row >= 0 && exp.row < 11, `explosion row ${exp.row} out of bounds`);
+  }
+}
+
+// -- Explosion tests --
+
 function testExplosionBlockedByWalls() {
-  // Wall should stop explosion propagation
   const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
   gridSpec[3][5] = 1; // solid wall to the right of bomb
   const grid = makeGrid(gridSpec);
   const bombs = new BombManager();
 
-  bombs.placeBomb(3, 3, 0, 3); // range 3 at (3,3)
-  // Force detonation
+  bombs.placeBomb(3, 3, 0, 3);
   bombs.bombs[0].timer = 0;
   bombs.update(0.01, grid);
 
-  // Explosion should exist at (4,3) but NOT at (5,3) or beyond (wall blocks)
   const expCols = bombs.explosions
     .filter((e) => e.row === 3 && (e.direction === 'right' || e.direction === 'center'))
     .map((e) => e.col);
@@ -1432,15 +1491,52 @@ function testExplosionBlockedByWalls() {
   assert.ok(!expCols.includes(6), 'explosion must not pass through wall');
 }
 
+function testExplosionSpreadAllFourDirections() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(7, 5, 0, 3);
+  bombs.bombs[0].timer = 0;
+  bombs.update(0.01, grid);
+
+  // Center
+  assert.ok(bombs.explosions.some((e) => e.col === 7 && e.row === 5 && e.direction === 'center'),
+    'center explosion at (7,5)');
+
+  // Right arm
+  for (let i = 1; i <= 3; i++) {
+    assert.ok(bombs.explosions.some((e) => e.col === 7 + i && e.row === 5 && e.direction === 'right'),
+      `right explosion at col ${7 + i}`);
+  }
+  // Left arm
+  for (let i = 1; i <= 3; i++) {
+    assert.ok(bombs.explosions.some((e) => e.col === 7 - i && e.row === 5 && e.direction === 'left'),
+      `left explosion at col ${7 - i}`);
+  }
+  // Down arm
+  for (let i = 1; i <= 3; i++) {
+    assert.ok(bombs.explosions.some((e) => e.col === 7 && e.row === 5 + i && e.direction === 'down'),
+      `down explosion at row ${5 + i}`);
+  }
+  // Up arm
+  for (let i = 1; i <= 3; i++) {
+    assert.ok(bombs.explosions.some((e) => e.col === 7 && e.row === 5 - i && e.direction === 'up'),
+      `up explosion at row ${5 - i}`);
+  }
+
+  // Must NOT exceed range
+  assert.ok(!bombs.explosions.some((e) => e.col === 11 && e.row === 5), 'right arm stops at range');
+  assert.ok(!bombs.explosions.some((e) => e.col === 3 && e.row === 5), 'left arm stops at range');
+}
+
 function testExplosionDoesNotExceedRange() {
   const grid = makeGrid();
   const bombs = new BombManager();
 
-  bombs.placeBomb(7, 5, 0, 2); // range 2
+  bombs.placeBomb(7, 5, 0, 2);
   bombs.bombs[0].timer = 0;
   bombs.update(0.01, grid);
 
-  // Check right direction: should reach col 8, 9 but not 10
   const rightCols = bombs.explosions
     .filter((e) => e.row === 5 && e.direction === 'right')
     .map((e) => e.col);
@@ -1449,25 +1545,100 @@ function testExplosionDoesNotExceedRange() {
   assert.ok(!rightCols.includes(10), 'explosion must not exceed range');
 }
 
+function testExplosionDestroysBrickAndStops() {
+  const gridSpec = parseAsciiGrid(`
+    ...............
+    ...............
+    ...............
+    ...............
+    ...............
+    ...B...........
+    ...............
+    ...............
+    ...............
+    ...............
+    ...............
+  `);
+  const grid = makeGrid(gridSpec, { brickDensity: 100 });
+  const bombs = new BombManager();
+
+  // Bomb at (2,5) range 3, brick at (3,5)
+  bombs.placeBomb(2, 5, 0, 3);
+  bombs.bombs[0].timer = 0;
+  const events = bombs.update(0.01, grid);
+
+  // Brick should be destroyed
+  assert.ok(events.bricksDestroyed.some((b) => b.col === 3 && b.row === 5),
+    'brick at (3,5) should be in bricksDestroyed');
+  // Cell should now be empty
+  const cell = grid.getCell(3, 5);
+  assert.equal(cell.type, 0, 'brick cell should now be CellContent.Empty');
+
+  // Explosion should exist at the brick cell but NOT beyond it
+  assert.ok(bombs.explosions.some((e) => e.col === 3 && e.row === 5),
+    'explosion at brick position');
+  assert.ok(!bombs.explosions.some((e) => e.col === 4 && e.row === 5 && e.direction === 'right'),
+    'explosion must stop after destroying brick');
+}
+
 function testBombChainExplosion() {
   const grid = makeGrid();
   const bombs = new BombManager();
 
-  // Two bombs in range of each other
   bombs.placeBomb(3, 5, 0, 2);
   bombs.placeBomb(5, 5, 1, 2);
 
-  // Detonate first bomb — after update, exploded bombs are removed from the array
   bombs.bombs[0].timer = 0;
   bombs.update(0.01, grid);
 
-  // Both bombs should be gone (exploded and removed)
-  // If chain worked, there should be explosions at col 5
   const chainExplosions = bombs.explosions.filter((e) => e.col === 5 && e.row === 5);
   assert.ok(chainExplosions.length > 0, 'bomb at (5,5) should chain-explode from bomb at (3,5)');
-  // And no live bombs remain
   assert.equal(bombs.bombs.length, 0, 'all bombs should have exploded');
 }
+
+function testThreeBombChainExplosion() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  // Three bombs in a line, each within range 2 of the next
+  bombs.placeBomb(2, 5, 0, 2);
+  bombs.placeBomb(4, 5, 1, 2);
+  bombs.placeBomb(6, 5, 2, 2);
+
+  bombs.bombs[0].timer = 0;
+  bombs.update(0.01, grid);
+
+  // All three should have detonated
+  assert.equal(bombs.bombs.length, 0, 'all three bombs should have chain-exploded');
+  // Explosions should exist at all three centers
+  assert.ok(bombs.explosions.some((e) => e.col === 2 && e.row === 5 && e.direction === 'center'),
+    'explosion center at bomb 1');
+  assert.ok(bombs.explosions.some((e) => e.col === 4 && e.row === 5 && e.direction === 'center'),
+    'explosion center at bomb 2');
+  assert.ok(bombs.explosions.some((e) => e.col === 6 && e.row === 5 && e.direction === 'center'),
+    'explosion center at bomb 3');
+}
+
+function testSimultaneousDetonations() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  // Two independent bombs both expiring in the same tick
+  bombs.placeBomb(2, 2, 0, 2);
+  bombs.placeBomb(12, 8, 1, 2);
+  bombs.bombs[0].timer = 0;
+  bombs.bombs[1].timer = 0;
+
+  const events = bombs.update(0.01, grid);
+
+  assert.equal(bombs.bombs.length, 0, 'both bombs should have exploded');
+  assert.ok(events.explosionPositions.some((p) => p.col === 2 && p.row === 2),
+    'events should include bomb 1 center');
+  assert.ok(events.explosionPositions.some((p) => p.col === 12 && p.row === 8),
+    'events should include bomb 2 center');
+}
+
+// -- Player and death tests --
 
 function testPlayerDiesInExplosion() {
   const grid = makeGrid(null, {
@@ -1480,9 +1651,49 @@ function testPlayerDiesInExplosion() {
   bombs.bombs[0].timer = 0;
   bombs.update(0.01, grid);
 
-  // Check player position is in explosion
   const { col, row } = player.getGridPos();
   assert.ok(bombs.isExploding(col, row), 'explosion should be at player position');
+}
+
+function testDeathDetectionPrecisionBoundary() {
+  // Player at x=4.8: floor(4.8 + 0.2) = floor(5.0) = 5
+  // Explosion at col 4 should NOT kill this player
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  const player = new Player(0, 'human', 4.8, 5);
+  const { col } = player.getGridPos();
+  assert.equal(col, 5, 'player at x=4.8 maps to col 5');
+
+  bombs.placeBomb(3, 5, 0, 1); // range 1: center (3,5) + right (4,5) only
+  bombs.bombs[0].timer = 0;
+  bombs.update(0.01, grid);
+
+  assert.ok(bombs.isExploding(4, 5), 'explosion exists at col 4');
+  assert.ok(!bombs.isExploding(5, 5), 'no explosion at col 5');
+  // Player at col 5 should survive
+  assert.ok(!bombs.isExploding(col, 5), 'player at col 5 survives explosion at col 4');
+}
+
+function testDeadPlayerNotKilledAgain() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 3, 3);
+
+  // Kill the player first
+  player.die();
+  assert.equal(player.alive, false);
+  const firstDeathTimer = player.deathTimer;
+
+  // Now place explosion at their position
+  bombs.placeBomb(3, 3, 0, 2);
+  bombs.bombs[0].timer = 0;
+  bombs.update(0.01, grid);
+
+  // alive is still false, deathTimer should not have been reset
+  assert.equal(player.alive, false);
+  assert.equal(player.deathTimer, firstDeathTimer,
+    'deathTimer should not be reset by a second explosion');
 }
 
 function testPlayerMovementBlockedByWall() {
@@ -1494,24 +1705,65 @@ function testPlayerMovementBlockedByWall() {
   const bombs = new BombManager();
 
   const player = new Player(0, 'human', 4, 3);
-  player.inputRight = true;
+  player.setInput('right', true);
 
-  // Try to move right into wall for 1 second
+  // Simulate 1 second of movement toward the wall
   for (let i = 0; i < 60; i++) {
     player.update(1 / 60, grid, bombs);
   }
 
-  // Player should not pass the wall
   assert.ok(player.x < 5, `player should be blocked by wall at col 5, got x=${player.x}`);
+  // Also verify the player actually tried to move (not a false positive)
+  assert.ok(player.x > 4, `player should have moved right from x=4, got x=${player.x}`);
 }
 
-function testBombNotPlacedOnExistingBomb() {
+function testPlayerMovesOnOpenGrid() {
+  // Complementary test: player actually moves when no wall blocks
   const grid = makeGrid();
   const bombs = new BombManager();
 
-  assert.ok(bombs.placeBomb(3, 3, 0, 2), 'first bomb places OK');
-  assert.ok(!bombs.placeBomb(3, 3, 1, 2), 'second bomb at same cell should fail');
+  const player = new Player(0, 'human', 4, 3);
+  player.setInput('right', true);
+
+  for (let i = 0; i < 60; i++) {
+    player.update(1 / 60, grid, bombs);
+  }
+
+  // Player speed is 3.0 tiles/sec, should have moved ~3 tiles in 1 second
+  assert.ok(player.x > 6, `player should move freely on open grid, got x=${player.x}`);
 }
+
+// -- Grace period tests --
+
+function testGracePeriodAllowsOwnBombWalkthrough() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 0, 2);
+  // Bomb has graceOwner = 0 by default (set in placeBomb)
+  assert.equal(bombs.bombs[0].graceOwner, 0, 'grace should be set to owner');
+
+  // Player 0 can walk through their own bomb
+  assert.ok(!bombs.isBombBlocking(5, 5, 0), 'own bomb should not block owner during grace');
+  // Player 1 cannot
+  assert.ok(bombs.isBombBlocking(5, 5, 1), 'bomb should block other players');
+}
+
+function testGracePeriodClearsAfterLeaving() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 0, 2);
+  assert.ok(!bombs.isBombBlocking(5, 5, 0), 'grace active: bomb does not block owner');
+
+  // Player moves to (6,5) — clear grace
+  bombs.clearGrace(0, 6, 5);
+
+  // Now player 0 should also be blocked
+  assert.ok(bombs.isBombBlocking(5, 5, 0), 'grace cleared: bomb blocks owner too');
+}
+
+// -- Punch tests --
 
 function testPunchBombArcLanding() {
   const grid = makeGrid();
@@ -1520,45 +1772,69 @@ function testPunchBombArcLanding() {
   bombs.placeBomb(3, 5, 0, 2);
   const punched = bombs.punchBomb(3, 5, 'right', grid);
   assert.ok(punched, 'punch should succeed');
-  // Bomb should land at distance 3-5 (preferred range)
   const bomb = bombs.bombs[0];
-  assert.ok(bomb.col >= 6 && bomb.col <= 8,
-    `punched bomb should land at col 6-8, got ${bomb.col}`);
+  // On empty grid, first eligible cell is at distance 3 (preferred min)
+  assert.equal(bomb.col, 6, 'punched bomb should land at col 6 (distance 3)');
   assert.equal(bomb.row, 5, 'punched bomb should stay on same row');
+}
+
+function testPunchBombFliesOverObstacles() {
+  // Punch arcs over walls — verify bomb lands on far side
+  const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
+  gridSpec[5][5] = 1; // wall in the middle of the arc path
+  const grid = makeGrid(gridSpec);
+  const bombs = new BombManager();
+
+  bombs.placeBomb(3, 5, 0, 2);
+  const punched = bombs.punchBomb(3, 5, 'right', grid);
+  assert.ok(punched, 'punch should succeed (arcs over wall)');
+  // Bomb skips col 5 (wall), lands at col 6 (dist=3, first preferred clear cell)
+  assert.equal(bombs.bombs[0].col, 6, 'bomb should arc over wall to col 6');
 }
 
 function testPunchBombBlockedByWall() {
   const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
-  // Wall all cells to the right
   for (let c = 4; c <= 14; c++) gridSpec[5][c] = 1;
   const grid = makeGrid(gridSpec);
   const bombs = new BombManager();
 
   bombs.placeBomb(3, 5, 0, 2);
   const punched = bombs.punchBomb(3, 5, 'right', grid);
-  // No clear landing exists — punch should fail
   assert.ok(!punched, 'punch should fail when all landing cells are walled');
   assert.equal(bombs.bombs[0].col, 3, 'bomb should stay at original position');
 }
 
+// -- Kick tests --
+
 function testKickBombStopsAtWall() {
   const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
-  gridSpec[5][7] = 1; // wall at (7,5)
+  gridSpec[5][7] = 1;
   const grid = makeGrid(gridSpec);
   const bombs = new BombManager();
 
   bombs.placeBomb(3, 5, 0, 2);
   bombs.kickBomb(3, 5, 'right', grid);
 
-  // Simulate several frames of sliding
-  for (let i = 0; i < 120; i++) {
-    bombs.update(1 / 60, grid);
-  }
+  tickBombsUntil(() => !bombs.bombs[0]?.sliding, bombs, grid, 3);
 
-  // Bomb should stop before the wall
   const bomb = bombs.bombs[0];
   assert.ok(bomb.col <= 6,
     `kicked bomb should stop before wall at col 7, got col=${bomb.col}`);
+  assert.ok(!bomb.sliding, 'bomb should have stopped sliding');
+}
+
+function testKickBombStopsAtGridEdge() {
+  const grid = makeGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(12, 5, 0, 2);
+  bombs.kickBomb(12, 5, 'right', grid);
+
+  tickBombsUntil(() => !bombs.bombs[0]?.sliding, bombs, grid, 3);
+
+  const bomb = bombs.bombs[0];
+  assert.ok(bomb.col <= 14, `kicked bomb must not go beyond col 14, got ${bomb.col}`);
+  assert.ok(bomb.col >= 12, `kicked bomb should have moved right from col 12, got ${bomb.col}`);
   assert.ok(!bomb.sliding, 'bomb should have stopped sliding');
 }
 
@@ -1607,20 +1883,40 @@ async function main() {
   await run('match victory singular summary copy stays singular for one-round matches', testMatchVictorySingleRoundSummaryUsesSingularCopy);
   await run('gameplay escape returns to menu and clears match progress', testGameplayEscapeReturnsToMenuAndClearsMatchProgress);
 
-  // Engine unit tests
-  await run('getGridPos matches collision detection formula', testGetGridPosMatchesCollisionDetection);
-  await run('bomb placed at player cell not adjacent cell', testBombPlacedAtPlayerCell);
+  // Engine unit tests — coordinate math
+  await run('getGridPos matches collision detection formula across full grid', testGetGridPosMatchesCollisionDetection);
+  await run('getGridPos correct at grid edges and corners', testGetGridPosAtGridEdges);
   await run('bomb placement at cell boundary uses floor not round', testBombPlacedAtPlayerCellBoundary);
-  await run('bomb cannot be placed through walls', testBombCannotPlaceThroughWalls);
-  await run('explosion blocked by solid walls', testExplosionBlockedByWalls);
-  await run('explosion does not exceed bomb range', testExplosionDoesNotExceedRange);
-  await run('bomb chain explosion propagates', testBombChainExplosion);
-  await run('player position overlaps explosion at same cell', testPlayerDiesInExplosion);
-  await run('player movement blocked by wall', testPlayerMovementBlockedByWall);
+  await run('bomb placed at player cell not adjacent cell', testBombPlacedAtPlayerCell);
   await run('cannot place two bombs on same cell', testBombNotPlacedOnExistingBomb);
+  await run('bomb placement works at all four grid corners', testBombPlacementAtGridCorners);
+
+  // Engine unit tests — explosions
+  await run('explosion blocked by solid walls', testExplosionBlockedByWalls);
+  await run('explosion spreads in all four directions', testExplosionSpreadAllFourDirections);
+  await run('explosion does not exceed bomb range', testExplosionDoesNotExceedRange);
+  await run('explosion destroys brick and stops propagating', testExplosionDestroysBrickAndStops);
+  await run('bomb chain explosion propagates', testBombChainExplosion);
+  await run('three bomb chain explosion propagates end to end', testThreeBombChainExplosion);
+  await run('simultaneous detonations in one update tick', testSimultaneousDetonations);
+
+  // Engine unit tests — player and death
+  await run('player position overlaps explosion at same cell', testPlayerDiesInExplosion);
+  await run('death detection precision at cell boundary', testDeathDetectionPrecisionBoundary);
+  await run('dead player is not killed again', testDeadPlayerNotKilledAgain);
+  await run('player movement blocked by wall', testPlayerMovementBlockedByWall);
+  await run('player moves freely on open grid', testPlayerMovesOnOpenGrid);
+
+  // Engine unit tests — grace period
+  await run('grace period allows own bomb walkthrough', testGracePeriodAllowsOwnBombWalkthrough);
+  await run('grace period clears after player leaves bomb cell', testGracePeriodClearsAfterLeaving);
+
+  // Engine unit tests — punch and kick
   await run('punch bomb arc lands at correct distance', testPunchBombArcLanding);
+  await run('punch bomb flies over obstacles', testPunchBombFliesOverObstacles);
   await run('punch bomb fails when all landing cells walled', testPunchBombBlockedByWall);
   await run('kicked bomb stops at wall', testKickBombStopsAtWall);
+  await run('kicked bomb stops at grid edge', testKickBombStopsAtGridEdge);
 
   if (process.exitCode) {
     process.exit(process.exitCode);
