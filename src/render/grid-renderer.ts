@@ -29,6 +29,7 @@ export class GridRenderer {
 
   private tileSprites: HTMLCanvasElement[] | null = null;
   private crumbleSprites: HTMLCanvasElement[] | null = null;
+  private fieldBackground: HTMLCanvasElement | null = null;
   private tileLoadStarted = false;
   private crumblingBricks: CrumblingBrick[] = [];
 
@@ -56,6 +57,14 @@ export class GridRenderer {
     void loadAnimationWithFallback('XBRICK0.ANI', 'BRICK.ANI').then((anim) => {
       if (anim) this.crumbleSprites = anim.frames;
     });
+
+    // Load the FIELD0.PCX full-arena background image.
+    // This is the original game's floor texture that tiles across the entire arena.
+    void assets.getImage('FIELD0.PCX').then((canvas) => {
+      if (canvas.width > 0 && canvas.height > 0) {
+        this.fieldBackground = canvas;
+      }
+    }).catch(() => {});
   }
 
   /** Notify that bricks were destroyed — starts crumble animations */
@@ -81,6 +90,20 @@ export class GridRenderer {
     const tw = this.tileWidth;
     const th = this.tileHeight;
 
+    // Draw the FIELD background first if available — this covers the entire
+    // arena floor in one draw call, matching the original game's rendering.
+    if (this.fieldBackground) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        this.fieldBackground,
+        0, 0,
+        GRID_COLS * tw,
+        GRID_ROWS * th,
+      );
+      ctx.restore();
+    }
+
     for (let row = 0; row < GRID_ROWS; row++) {
       for (let col = 0; col < GRID_COLS; col++) {
         const x = col * tw;
@@ -88,7 +111,10 @@ export class GridRenderer {
         const cell = grid.getCell(col, row);
         const type = cell?.type ?? CellContent.Empty;
 
-        if (this.tileSprites) {
+        if (this.fieldBackground) {
+          // Field background already drawn; only overlay bricks/walls
+          this.renderOverlayTile(ctx, x, y, tw, th, type);
+        } else if (this.tileSprites) {
           this.renderImportedTile(ctx, x, y, tw, th, type);
         } else {
           this.renderFallbackTile(ctx, x, y, tw, th, type);
@@ -134,13 +160,42 @@ export class GridRenderer {
       // Draw the empty floor underneath so the crumble sprites (which have
       // transparent regions) composite correctly over the floor rather than
       // over whatever was drawn there during the grid pass.
-      if (this.tileSprites && this.tileSprites.length > TILE_FRAME_EMPTY) {
+      if (this.fieldBackground) {
+        // Blit the matching region from the full-arena field background
+        ctx.drawImage(this.fieldBackground, x, y, tw, th, x, y, tw, th);
+      } else if (this.tileSprites && this.tileSprites.length > TILE_FRAME_EMPTY) {
         ctx.drawImage(this.tileSprites[TILE_FRAME_EMPTY], x, y, tw, th);
       }
 
       ctx.drawImage(frame, x, y, tw, th);
       ctx.restore();
     }
+  }
+
+  /**
+   * Render only brick/solid wall overlay when a FIELD background is present.
+   * Empty cells need no extra drawing since the background already covers them.
+   */
+  private renderOverlayTile(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number,
+    tw: number, th: number,
+    type: CellContent,
+  ): void {
+    if (type === CellContent.Brick) {
+      if (this.tileSprites) {
+        ctx.drawImage(this.tileSprites[TILE_FRAME_BRICK], x, y, tw, th);
+      } else {
+        this.renderFallbackTile(ctx, x, y, tw, th, type);
+      }
+    } else if (type === CellContent.Solid) {
+      if (this.tileSprites) {
+        ctx.drawImage(this.tileSprites[TILE_FRAME_SOLID], x, y, tw, th);
+      } else {
+        this.renderFallbackTile(ctx, x, y, tw, th, type);
+      }
+    }
+    // Empty cells: nothing to draw — field background already visible
   }
 
   private renderImportedTile(

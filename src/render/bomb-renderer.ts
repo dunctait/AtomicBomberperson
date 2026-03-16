@@ -103,7 +103,7 @@ export class BombRenderer {
       const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
       if (this.bombFrames) {
-        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
+        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       } else {
         this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       }
@@ -125,6 +125,7 @@ export class BombRenderer {
     tileH: number,
     time: number,
     bombTimer: number,
+    owner: number,
   ): void {
     const frames = this.bombFrames!;
 
@@ -139,6 +140,17 @@ export class BombRenderer {
     // Use geometric centering for bomb placement so bomb and explosion origins align.
     const drawX = cx - drawW / 2;
     const drawY = cy - drawH / 2;
+
+    // Draw a colored ownership ring under the bomb so players can tell whose is whose.
+    // The original game uses the same bomb sprite for all players.
+    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + drawH * 0.35, drawW * 0.4, drawH * 0.18, 0, 0, Math.PI * 2);
+    ctx.fillStyle = ownerColor;
+    ctx.globalAlpha = 0.5;
+    ctx.fill();
+    ctx.restore();
 
     ctx.save();
     ctx.imageSmoothingEnabled = false;

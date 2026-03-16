@@ -10,8 +10,10 @@ export interface GameConfig {
   map: string;
   mapFile: string | null;
   winsRequired: number;
-  /** Round timer in seconds. When it reaches 0, sudden death begins. */
+  /** Round timer in seconds. When it reaches 0, sudden death begins. 0 means no timer (sudden death disabled). */
   roundTimerSeconds: number;
+  /** Override brick density percentage (0-100). null means use scheme default. */
+  brickDensityOverride: number | null;
 }
 
 export const gameConfig: GameConfig = {
@@ -21,6 +23,7 @@ export const gameConfig: GameConfig = {
   mapFile: null,
   winsRequired: 3,
   roundTimerSeconds: 120,
+  brickDensityOverride: null,
 };
 
 /** Reset config to defaults and build the player slot array. */
@@ -30,6 +33,7 @@ export function resetConfig(): void {
   gameConfig.mapFile = null;
   gameConfig.winsRequired = 3;
   gameConfig.roundTimerSeconds = 120;
+  gameConfig.brickDensityOverride = null;
   rebuildSlots();
 }
 

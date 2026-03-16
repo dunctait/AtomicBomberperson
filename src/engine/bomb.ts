@@ -224,20 +224,38 @@ export class BombManager {
     const bomb = this.getLiveBombAt(col, row);
     if (!bomb) return false;
 
+    const landing = this.findArcLanding(col, row, direction, grid);
+    if (!landing) return false;
+
+    bomb.col = landing.col;
+    bomb.row = landing.row;
+    bomb.graceOwner = null;
+    this.stopSliding(bomb);
+    return true;
+  }
+
+  /**
+   * Shared arc-landing logic for punch and throw.
+   * Scans tiles 1-5 in the given direction, flying over obstacles.
+   * Prefers landing on the first clear cell at distance 3-5; falls back to
+   * the last clear cell at any distance. Returns null if no landing exists.
+   */
+  private findArcLanding(
+    originCol: number,
+    originRow: number,
+    direction: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+  ): { col: number; row: number } | null {
     const { ddx, ddy } = dirToDeltas(direction);
+    const ARC_MAX_DIST = 5;
+    const ARC_PREFERRED_MIN = 3;
 
-    // Scan tiles 1 through 5 in the punch direction.
-    // The bomb flies over everything and tries to land on the first clear
-    // cell at distance 3, 4, or 5. If none of those are clear, fall back
-    // to the last clear cell encountered at any distance.
-    let lastClearCol: number | null = null;
-    let lastClearRow: number | null = null;
+    let lastClear: { col: number; row: number } | null = null;
 
-    for (let dist = 1; dist <= 5; dist++) {
-      const targetCol = col + ddx * dist;
-      const targetRow = row + ddy * dist;
+    for (let dist = 1; dist <= ARC_MAX_DIST; dist++) {
+      const targetCol = originCol + ddx * dist;
+      const targetRow = originRow + ddy * dist;
 
-      // Out of bounds — stop scanning
       if (targetCol < 0 || targetCol >= GRID_COLS || targetRow < 0 || targetRow >= GRID_ROWS) {
         break;
       }
@@ -245,34 +263,16 @@ export class BombManager {
       const cell = grid.getCell(targetCol, targetRow);
       if (!cell) break;
 
-      const isClear = cell.type === CellContent.Empty && !this.hasBomb(targetCol, targetRow);
+      if (cell.type === CellContent.Empty && !this.hasBomb(targetCol, targetRow)) {
+        lastClear = { col: targetCol, row: targetRow };
 
-      if (isClear) {
-        lastClearCol = targetCol;
-        lastClearRow = targetRow;
-
-        // Prefer landing at distance 3-5
-        if (dist >= 3) {
-          bomb.col = targetCol;
-          bomb.row = targetRow;
-          bomb.graceOwner = null;
-          this.stopSliding(bomb);
-          return true;
+        if (dist >= ARC_PREFERRED_MIN) {
+          return lastClear;
         }
       }
     }
 
-    // No clear cell at distance 3-5 — use the last clear cell we found
-    if (lastClearCol !== null && lastClearRow !== null) {
-      bomb.col = lastClearCol;
-      bomb.row = lastClearRow;
-      bomb.graceOwner = null;
-      this.stopSliding(bomb);
-      return true;
-    }
-
-    // No valid landing spot at all — punch fails
-    return false;
+    return lastClear;
   }
 
   /** Check whether a grid cell is traversable by a sliding bomb. */
@@ -534,42 +534,11 @@ export class BombManager {
     direction: 'up' | 'down' | 'left' | 'right',
     grid: GameGrid,
   ): void {
-    const { ddx, ddy } = dirToDeltas(direction);
+    const landing = this.findArcLanding(originCol, originRow, direction, grid);
 
-    let lastClearCol: number | null = null;
-    let lastClearRow: number | null = null;
-
-    for (let dist = 1; dist <= 5; dist++) {
-      const targetCol = originCol + ddx * dist;
-      const targetRow = originRow + ddy * dist;
-
-      if (targetCol < 0 || targetCol >= GRID_COLS || targetRow < 0 || targetRow >= GRID_ROWS) {
-        break;
-      }
-
-      const cell = grid.getCell(targetCol, targetRow);
-      if (!cell) break;
-
-      const isClear = cell.type === CellContent.Empty && !this.hasBomb(targetCol, targetRow);
-
-      if (isClear) {
-        lastClearCol = targetCol;
-        lastClearRow = targetRow;
-
-        if (dist >= 3) {
-          bomb.col = targetCol;
-          bomb.row = targetRow;
-          bomb.graceOwner = null;
-          this.stopSliding(bomb);
-          this.bombs.push(bomb);
-          return;
-        }
-      }
-    }
-
-    if (lastClearCol !== null && lastClearRow !== null) {
-      bomb.col = lastClearCol;
-      bomb.row = lastClearRow;
+    if (landing) {
+      bomb.col = landing.col;
+      bomb.row = landing.row;
     } else {
       // No landing spot — drop at origin
       bomb.col = originCol;

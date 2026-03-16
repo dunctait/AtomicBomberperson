@@ -30,6 +30,17 @@ const DIRS: { dx: number; dy: number }[] = [
   { dx: 1, dy: 0 },
 ];
 
+const THINK_INTERVAL_BASE = 0.3;
+const THINK_INTERVAL_JITTER = 0.2;
+const THINK_QUICK_RETHINK = 0.05;
+const THINK_THROW_DELAY = 0.1;
+const BOMB_COOLDOWN_WITH_KICK = 0.8;
+const BOMB_COOLDOWN_DEFAULT = 1.5;
+const ATTACK_SEARCH_DEPTH = 8;
+const ENEMY_HIT_SCORE_BONUS = 3;
+const NAV_ARRIVAL_THRESHOLD = 0.15;
+const NAV_DIRECTION_DEADZONE = 0.05;
+
 export class AIBot {
   player: Player;
   private thinkTimer: number;
@@ -40,7 +51,7 @@ export class AIBot {
 
   constructor(player: Player) {
     this.player = player;
-    this.thinkTimer = Math.random() * 0.3;
+    this.thinkTimer = Math.random() * THINK_INTERVAL_BASE;
     this.currentGoal = 'wander';
     this.path = [];
     this.pathIndex = 0;
@@ -61,7 +72,7 @@ export class AIBot {
 
     if (this.thinkTimer <= 0) {
       this.think(grid, bombs, powerups, allPlayers);
-      this.thinkTimer = 0.3 + Math.random() * 0.2;
+      this.thinkTimer = THINK_INTERVAL_BASE + Math.random() * THINK_INTERVAL_JITTER;
     }
 
     this.navigatePath(grid, bombs);
@@ -93,7 +104,7 @@ export class AIBot {
       }
       this.path = [];
       this.pathIndex = 0;
-      this.thinkTimer = 0.1;
+      this.thinkTimer = THINK_THROW_DELAY;
       return;
     }
 
@@ -102,7 +113,7 @@ export class AIBot {
       // Grab own bomb to remove the danger source (if we have grab and are on our own bomb)
       if (this.player.stats.canGrab && bombs.hasBomb(pos.col, pos.row)) {
         this.player.inputBomb = true;
-        this.thinkTimer = 0.05; // Re-think quickly to throw it
+        this.thinkTimer = THINK_QUICK_RETHINK; // Re-think quickly to throw it
         return;
       }
 
@@ -137,9 +148,9 @@ export class AIBot {
             this.isCellSafe(pos.col, pos.row, grid, bombs) &&
             this.simPlaceBombIsSafe(pos.col, pos.row, grid, bombs)) {
           this.player.inputBomb = true;
-          this.bombCooldown = this.player.stats.canKick ? 0.8 : 1.5;
+          this.bombCooldown = this.player.stats.canKick ? BOMB_COOLDOWN_WITH_KICK : BOMB_COOLDOWN_DEFAULT;
           // Re-think quickly to flee
-          this.thinkTimer = 0.05;
+          this.thinkTimer = THINK_QUICK_RETHINK;
           return;
         }
       } else {
@@ -370,7 +381,7 @@ export class AIBot {
       const current = queue.shift()!;
 
       // Don't search too far
-      if (current.dist > 8) continue;
+      if (current.dist > ATTACK_SEARCH_DEPTH) continue;
 
       // Score this tile
       const brickCount = this.countBricksHit(current.col, current.row, range, grid);
@@ -378,7 +389,7 @@ export class AIBot {
 
       if (brickCount > 0 || enemyNear) {
         // Score: bricks destroyed, biased by closeness (fpc_atomic picks max bricks, closest)
-        const score = (brickCount + (enemyNear ? 3 : 0)) * 10 - current.dist;
+        const score = (brickCount + (enemyNear ? ENEMY_HIT_SCORE_BONUS : 0)) * 10 - current.dist;
         if (score > bestScore) {
           bestScore = score;
           bestTarget = { col: current.col, row: current.row };
@@ -593,9 +604,7 @@ export class AIBot {
 
     const dx = target.col - this.player.x;
     const dy = target.row - this.player.y;
-    const threshold = 0.15;
-
-    if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) {
+    if (Math.abs(dx) < NAV_ARRIVAL_THRESHOLD && Math.abs(dy) < NAV_ARRIVAL_THRESHOLD) {
       this.pathIndex++;
       if (this.pathIndex >= this.path.length) return;
       const next = this.path[this.pathIndex];
@@ -622,11 +631,11 @@ export class AIBot {
 
   private setDirectionToward(dx: number, dy: number): void {
     if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > 0.05) this.player.setInput('right', true);
-      else if (dx < -0.05) this.player.setInput('left', true);
+      if (dx > NAV_DIRECTION_DEADZONE) this.player.setInput('right', true);
+      else if (dx < -NAV_DIRECTION_DEADZONE) this.player.setInput('left', true);
     } else {
-      if (dy > 0.05) this.player.setInput('down', true);
-      else if (dy < -0.05) this.player.setInput('up', true);
+      if (dy > NAV_DIRECTION_DEADZONE) this.player.setInput('down', true);
+      else if (dy < -NAV_DIRECTION_DEADZONE) this.player.setInput('up', true);
     }
   }
 

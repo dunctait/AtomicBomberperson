@@ -13,6 +13,12 @@ const MAX_PLAYERS = 10;
 const MIN_WINS = 1;
 const MAX_WINS = 10;
 
+/** Allowed round timer values in seconds. 0 means "Off" (no timer / no sudden death). */
+const ROUND_TIMER_OPTIONS = [0, 30, 60, 90, 120, 180, 300];
+
+/** Allowed brick density override values. null means "Scheme" (use scheme default). */
+const BRICK_DENSITY_OPTIONS: (number | null)[] = [null, 0, 25, 50, 75, 100];
+
 interface AvailableMapOption {
   label: string;
   file: string | null;
@@ -244,6 +250,54 @@ export function createGameSetup(
         onNext: () => {
           if (gameConfig.winsRequired < MAX_WINS) {
             gameConfig.winsRequired++;
+            render(container);
+          }
+        },
+      }),
+    );
+
+    // --- Round Timer stepper ---
+    const timerIndex = ROUND_TIMER_OPTIONS.indexOf(gameConfig.roundTimerSeconds);
+    const effectiveTimerIndex = timerIndex === -1 ? ROUND_TIMER_OPTIONS.indexOf(120) : timerIndex;
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'ROUND TIMER',
+        value: gameConfig.roundTimerSeconds === 0 ? 'OFF' : `${gameConfig.roundTimerSeconds}s`,
+        previousDisabled: effectiveTimerIndex <= 0,
+        nextDisabled: effectiveTimerIndex >= ROUND_TIMER_OPTIONS.length - 1,
+        onPrevious: () => {
+          if (effectiveTimerIndex > 0) {
+            gameConfig.roundTimerSeconds = ROUND_TIMER_OPTIONS[effectiveTimerIndex - 1];
+            render(container);
+          }
+        },
+        onNext: () => {
+          if (effectiveTimerIndex < ROUND_TIMER_OPTIONS.length - 1) {
+            gameConfig.roundTimerSeconds = ROUND_TIMER_OPTIONS[effectiveTimerIndex + 1];
+            render(container);
+          }
+        },
+      }),
+    );
+
+    // --- Brick Density stepper ---
+    const densityIndex = BRICK_DENSITY_OPTIONS.indexOf(gameConfig.brickDensityOverride);
+    const effectiveDensityIndex = densityIndex === -1 ? 0 : densityIndex;
+    wrapper.appendChild(
+      createSetupStepperRow({
+        label: 'BRICK DENSITY',
+        value: gameConfig.brickDensityOverride === null ? 'SCHEME' : `${gameConfig.brickDensityOverride}%`,
+        previousDisabled: effectiveDensityIndex <= 0,
+        nextDisabled: effectiveDensityIndex >= BRICK_DENSITY_OPTIONS.length - 1,
+        onPrevious: () => {
+          if (effectiveDensityIndex > 0) {
+            gameConfig.brickDensityOverride = BRICK_DENSITY_OPTIONS[effectiveDensityIndex - 1];
+            render(container);
+          }
+        },
+        onNext: () => {
+          if (effectiveDensityIndex < BRICK_DENSITY_OPTIONS.length - 1) {
+            gameConfig.brickDensityOverride = BRICK_DENSITY_OPTIONS[effectiveDensityIndex + 1];
             render(container);
           }
         },

@@ -539,6 +539,7 @@ export function createGameplayScreen(
   const SHAKE_DECAY_RATE = 9; // pixels per second decay
   const SHAKE_BASE_INTENSITY = 0.5; // base px per explosion
   const SHAKE_MAX_INTENSITY = 1.5; // hard cap
+  const TIMER_WARNING_THRESHOLD = 30; // seconds remaining before warning style
 
   // Win condition state
   let gameOver = false;
@@ -857,6 +858,10 @@ export function createGameplayScreen(
       scheme.name,
       scheme.name === 'FALLBACK',
     );
+    // Apply brick density override from game config if set
+    if (gameConfig.brickDensityOverride !== null) {
+      scheme.brickDensity = gameConfig.brickDensityOverride;
+    }
     gameGrid = new GameGrid(scheme);
 
     gridRenderer = new GridRenderer(canvas);
@@ -1072,8 +1077,8 @@ export function createGameplayScreen(
         }
       }
 
-      // Update round timer and sudden death
-      if (!suddenDeath.active) {
+      // Update round timer and sudden death (0 means timer is off)
+      if (!suddenDeath.active && gameConfig.roundTimerSeconds > 0) {
         roundTimeRemaining -= dt;
         if (roundTimeRemaining <= 0) {
           roundTimeRemaining = 0;
@@ -1093,11 +1098,13 @@ export function createGameplayScreen(
         if (suddenDeath.active) {
           hudTimerEl.textContent = 'SUDDEN DEATH';
           hudTimerEl.classList.add('gameplay-timer--danger');
+        } else if (gameConfig.roundTimerSeconds === 0) {
+          hudTimerEl.textContent = 'NO TIMER';
         } else {
           hudTimerEl.textContent = formatTimer(roundTimeRemaining);
           hudTimerEl.classList.toggle(
             'gameplay-timer--warning',
-            roundTimeRemaining <= 30,
+            roundTimeRemaining <= TIMER_WARNING_THRESHOLD,
           );
         }
       }
