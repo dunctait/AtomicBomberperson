@@ -228,6 +228,16 @@ export class AIBot {
           this.thinkTimer = THINK_QUICK_RETHINK;
           return;
         }
+        // Best target isn't safe — try reachable neighbors as alternative bomb spots
+        const altTarget = this.findAlternativeBombPosition(pos, grid, bombs);
+        if (altTarget) {
+          this.path = this.findPath(pos.col, pos.row, altTarget.col, altTarget.row, grid, bombs, true);
+          if (this.path.length > 0) {
+            this.pathIndex = 0;
+            this.currentGoal = 'attack';
+            return;
+          }
+        }
       } else {
         // Navigate toward target (avoid danger zones)
         this.path = this.findPath(pos.col, pos.row, bombTarget.col, bombTarget.row, grid, bombs, true);
@@ -508,6 +518,39 @@ export class AIBot {
     }
 
     return bestTarget;
+  }
+
+  /**
+   * When the best bomb target isn't safe, find a nearby reachable cell
+   * where bombing IS safe and would still hit at least one brick.
+   */
+  private findAlternativeBombPosition(pos: GridPos, grid: GameGrid, bombs: BombManager): GridPos | null {
+    const range = this.player.stats.bombRange;
+    const visited = new Set<string>();
+    const queue: GridPos[] = [];
+    visited.add(`${pos.col},${pos.row}`);
+
+    // Seed with walkable neighbors
+    for (const dir of DIRS) {
+      const nc = pos.col + dir.dx;
+      const nr = pos.row + dir.dy;
+      if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+          grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
+        const key = `${nc},${nr}`;
+        if (!visited.has(key)) {
+          visited.add(key);
+          queue.push({ col: nc, row: nr });
+        }
+      }
+    }
+
+    for (const candidate of queue) {
+      if (this.countBricksHit(candidate.col, candidate.row, range, grid) > 0 &&
+          this.simPlaceBombIsSafe(candidate.col, candidate.row, grid, bombs)) {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   /** Count how many bricks a bomb at (col, row) would destroy. */

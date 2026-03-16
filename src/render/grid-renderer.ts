@@ -90,8 +90,12 @@ export class GridRenderer {
     const tw = this.tileWidth;
     const th = this.tileHeight;
 
-    // Draw the FIELD background first if available — this covers the entire
-    // arena floor in one draw call, matching the original game's rendering.
+    // Fill the canvas with a floor color first to prevent black gaps where
+    // the field background or tile sprites don't cover (e.g., cleared border bricks).
+    ctx.fillStyle = '#1a5a1a';
+    ctx.fillRect(0, 0, GRID_COLS * tw, GRID_ROWS * th);
+
+    // Draw the FIELD background if available — covers the arena floor in one draw call.
     if (this.fieldBackground) {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
