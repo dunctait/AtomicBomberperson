@@ -6,6 +6,7 @@ import { createTitleScreen } from './screens/title-screen';
 import { createMainMenu } from './screens/main-menu';
 import { createGameSetup } from './screens/game-setup';
 import { createGameplayScreen } from './screens/gameplay-screen';
+import { createMatchVictory } from './screens/match-victory';
 import { createRoundResults } from './screens/round-results';
 
 async function main() {
@@ -28,6 +29,7 @@ async function main() {
   sm.register(createMainMenu(transition));
   sm.register(createGameSetup(transition));
   sm.register(createGameplayScreen(transition));
+  sm.register(createMatchVictory(transition));
   sm.register(createRoundResults(transition));
 
   sm.start('title-screen');

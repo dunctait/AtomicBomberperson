@@ -16,8 +16,12 @@ export const matchState: MatchState = {
 
 export function resetMatch(playerCount: number, winsRequired: number): void {
   matchState.winsRequired = winsRequired;
+  clearMatchProgress(new Array(playerCount).fill(0));
+}
+
+export function clearMatchProgress(scores: number[] = []): void {
   matchState.roundNumber = 0;
-  matchState.scores = new Array(playerCount).fill(0);
+  matchState.scores = scores;
   matchState.lastRoundWinner = -1;
   matchState.matchWinner = -1;
 }

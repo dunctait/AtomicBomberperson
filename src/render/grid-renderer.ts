@@ -93,6 +93,16 @@ export class GridRenderer {
         } else {
           this.renderFallbackTile(ctx, x, y, tw, th, type);
         }
+
+        const conveyorDirection = grid.getConveyorDirection(col, row);
+        if (conveyorDirection) {
+          this.renderConveyorOverlay(ctx, x, y, tw, th, conveyorDirection);
+        }
+
+        const warp = grid.getWarp(col, row);
+        if (warp) {
+          this.renderWarpOverlay(ctx, x, y, tw, th, warp.index);
+        }
       }
     }
 
@@ -202,6 +212,92 @@ export class GridRenderer {
       ctx.fillRect(x + 1, y + th - 4, tw - 2, 3);
       ctx.fillRect(x + tw - 4, y + 1, 3, th - 2);
     }
+  }
+
+  private renderConveyorOverlay(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    tw: number,
+    th: number,
+    direction: 'up' | 'down' | 'left' | 'right',
+  ): void {
+    const centerX = x + tw / 2;
+    const centerY = y + th / 2;
+    const shaft = Math.min(tw, th) * 0.22;
+    const head = Math.min(tw, th) * 0.16;
+
+    ctx.save();
+    ctx.strokeStyle = '#63d7ff';
+    ctx.fillStyle = '#63d7ff';
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+
+    if (direction === 'left' || direction === 'right') {
+      const tipX = direction === 'left' ? centerX - shaft - head : centerX + shaft + head;
+      const tailX = direction === 'left' ? centerX + shaft : centerX - shaft;
+      ctx.moveTo(tailX, centerY);
+      ctx.lineTo(tipX, centerY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(tipX, centerY);
+      ctx.lineTo(tipX + (direction === 'left' ? head : -head), centerY - head);
+      ctx.lineTo(tipX + (direction === 'left' ? head : -head), centerY + head);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      const tipY = direction === 'up' ? centerY - shaft - head : centerY + shaft + head;
+      const tailY = direction === 'up' ? centerY + shaft : centerY - shaft;
+      ctx.moveTo(centerX, tailY);
+      ctx.lineTo(centerX, tipY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(centerX, tipY);
+      ctx.lineTo(centerX - head, tipY + (direction === 'up' ? head : -head));
+      ctx.lineTo(centerX + head, tipY + (direction === 'up' ? head : -head));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  private renderWarpOverlay(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    tw: number,
+    th: number,
+    warpIndex: number,
+  ): void {
+    const centerX = x + tw / 2;
+    const centerY = y + th / 2;
+    const radius = Math.min(tw, th) * 0.22;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = '#ff78c7';
+    ctx.fillStyle = 'rgba(255, 120, 199, 0.18)';
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius * 0.55, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffe6f6';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(warpIndex + 1), centerX, centerY);
+    ctx.restore();
   }
 
   pixelToGrid(px: number, py: number): { col: number; row: number } {

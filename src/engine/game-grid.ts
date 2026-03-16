@@ -1,4 +1,10 @@
-import { TileType, type ParsedScheme, type SpawnPoint } from '../assets/parsers/sch-parser';
+import {
+  TileType,
+  type ConveyorDirection,
+  type ParsedScheme,
+  type SpawnPoint,
+  type WarpTile,
+} from '../assets/parsers/sch-parser';
 
 export const GRID_COLS = 15;
 export const GRID_ROWS = 11;
@@ -19,15 +25,25 @@ export interface Cell {
 export class GameGrid {
   cells: Cell[][];  // [row][col]
   spawnClearedBrickCount: number;
+  conveyors: (ConveyorDirection | null)[][];
+  warps: (WarpTile | null)[][];
+  warpTargets: Map<number, WarpTile>;
 
   constructor(scheme: ParsedScheme) {
     // Initialize all cells to empty
     this.cells = [];
     this.spawnClearedBrickCount = 0;
+    this.conveyors = [];
+    this.warps = [];
+    this.warpTargets = new Map();
     for (let r = 0; r < GRID_ROWS; r++) {
       this.cells.push([]);
+      this.conveyors.push([]);
+      this.warps.push([]);
       for (let c = 0; c < GRID_COLS; c++) {
         this.cells[r].push({ type: CellContent.Empty });
+        this.conveyors[r].push(null);
+        this.warps[r].push(null);
       }
     }
     this.initFromScheme(scheme);
@@ -35,6 +51,14 @@ export class GameGrid {
 
   /** Initialize the grid from a scheme, randomly placing bricks based on density */
   initFromScheme(scheme: ParsedScheme): void {
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        this.conveyors[r][c] = null;
+        this.warps[r][c] = null;
+      }
+    }
+    this.warpTargets.clear();
+
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
         const tile = scheme.grid[r]?.[c] ?? TileType.Empty;
@@ -54,6 +78,19 @@ export class GameGrid {
             this.cells[r][c].type = CellContent.Empty;
             break;
         }
+      }
+    }
+
+    for (const conveyor of scheme.conveyors) {
+      if (conveyor.y >= 0 && conveyor.y < GRID_ROWS && conveyor.x >= 0 && conveyor.x < GRID_COLS) {
+        this.conveyors[conveyor.y][conveyor.x] = conveyor.direction;
+      }
+    }
+
+    for (const warp of scheme.warps) {
+      if (warp.y >= 0 && warp.y < GRID_ROWS && warp.x >= 0 && warp.x < GRID_COLS) {
+        this.warps[warp.y][warp.x] = warp;
+        this.warpTargets.set(warp.index, warp);
       }
     }
 
@@ -103,6 +140,24 @@ export class GameGrid {
     const cell = this.getCell(col, row);
     if (!cell) return false;
     return cell.type === CellContent.Empty;
+  }
+
+  getConveyorDirection(col: number, row: number): ConveyorDirection | null {
+    if (row < 0 || row >= GRID_ROWS || col < 0 || col >= GRID_COLS) {
+      return null;
+    }
+    return this.conveyors[row][col];
+  }
+
+  getWarp(col: number, row: number): WarpTile | null {
+    if (row < 0 || row >= GRID_ROWS || col < 0 || col >= GRID_COLS) {
+      return null;
+    }
+    return this.warps[row][col];
+  }
+
+  getWarpDestination(warp: WarpTile): WarpTile | null {
+    return this.warpTargets.get(warp.target) ?? null;
   }
 
 }

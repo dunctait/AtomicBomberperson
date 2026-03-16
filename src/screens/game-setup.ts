@@ -26,6 +26,14 @@ export function createGameSetup(
   let availableMaps: AvailableMapOption[] = [{ label: gameConfig.map, file: gameConfig.mapFile }];
   let mapListRequestId = 0;
 
+  function getActivePlayerCount(): number {
+    return gameConfig.players.filter((slot) => slot.type !== 'off').length;
+  }
+
+  function canStartMatch(): boolean {
+    return getActivePlayerCount() >= 2;
+  }
+
   function createStepperButton(
     text: string,
     className: string,
@@ -194,17 +202,12 @@ export function createGameSetup(
       typeBtn.className = `setup-slot-type setup-slot-type--${slot.type}`;
       typeBtn.textContent = slot.type.toUpperCase();
 
-      if (i === 0) {
-        // Player 1 is always human
-        typeBtn.disabled = true;
-      } else {
-        typeBtn.addEventListener('click', () => {
-          const cycle: PlayerType[] = ['human', 'ai', 'off'];
-          const cur = cycle.indexOf(slot.type);
-          slot.type = cycle[(cur + 1) % cycle.length];
-          render(container);
-        });
-      }
+      typeBtn.addEventListener('click', () => {
+        const cycle: PlayerType[] = ['human', 'ai', 'off'];
+        const cur = cycle.indexOf(slot.type);
+        slot.type = cycle[(cur + 1) % cycle.length];
+        render(container);
+      });
 
       row.appendChild(typeBtn);
       slotList.appendChild(row);
@@ -254,7 +257,9 @@ export function createGameSetup(
     const startBtn = document.createElement('button');
     startBtn.className = 'setup-start-btn';
     startBtn.textContent = 'START';
+    startBtn.disabled = !canStartMatch();
     startBtn.addEventListener('click', () => {
+      if (!canStartMatch()) return;
       onTransition('gameplay');
     });
     btnRow.appendChild(startBtn);
@@ -271,7 +276,9 @@ export function createGameSetup(
 
     const hint = document.createElement('p');
     hint.className = 'setup-hint';
-    hint.textContent = 'ESC to go back';
+    hint.textContent = canStartMatch()
+      ? 'ESC to go back'
+      : 'Need at least 2 active players';
     wrapper.appendChild(hint);
 
     content.appendChild(wrapper);
@@ -296,6 +303,7 @@ export function createGameSetup(
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Enter') {
+        if (!canStartMatch()) return;
         onTransition('gameplay');
       } else if (e.key === 'Escape') {
         onTransition('main-menu');

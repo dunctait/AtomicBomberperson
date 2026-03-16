@@ -854,6 +854,7 @@ body {
 
 .gameplay-hud {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
@@ -867,8 +868,10 @@ body {
 
 .gameplay-map-meta {
   display: flex;
+  flex: 1 1 18rem;
   flex-direction: column;
   gap: 0.2rem;
+  min-width: 0;
 }
 
 .gameplay-map-name {
@@ -907,6 +910,7 @@ body {
 }
 
 .gameplay-controls {
+  flex: 0 0 auto;
   font-size: 0.45rem;
   color: #4a4a6e;
   text-align: right;
@@ -965,12 +969,23 @@ body {
   letter-spacing: 0.02em;
 }
 
+.hud-powerup--danger {
+  background: #8f3041;
+}
+
 /* ===== ROUND RESULTS SCREEN ===== */
 
 .round-results-screen {
   background:
     radial-gradient(ellipse at 50% 0%, #1e1040 0%, #090912 55%),
     radial-gradient(ellipse at 50% 100%, #0d1a30 0%, transparent 60%);
+}
+
+.match-victory-screen {
+  background:
+    radial-gradient(circle at 50% 18%, rgba(240, 178, 93, 0.24) 0%, transparent 28%),
+    radial-gradient(ellipse at 50% 0%, #2c1420 0%, #090912 58%),
+    radial-gradient(ellipse at 50% 100%, #1d220e 0%, transparent 60%);
 }
 
 .results-panel {
@@ -982,6 +997,7 @@ body {
   align-items: center;
   gap: 1rem;
   padding: 28px 0 20px;
+  cursor: pointer;
 }
 
 .results-heading {
@@ -1019,6 +1035,14 @@ body {
   border: 2px solid color-mix(in srgb, var(--player-color, #fff) 60%, transparent);
   border-radius: 4px;
   background: color-mix(in srgb, var(--player-color, #fff) 10%, transparent);
+}
+
+.match-victory-summary {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: #f0b25d;
+  letter-spacing: 0.08em;
+  text-align: center;
 }
 
 /* "First to N wins" subtitle */

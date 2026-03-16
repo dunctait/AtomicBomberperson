@@ -1,9 +1,13 @@
 import { GameGrid, CellContent, GRID_COLS, GRID_ROWS } from './game-grid';
 
+type BombSlideMode = 'kick' | 'conveyor';
+
 export interface Bomb {
   col: number;
   row: number;
   owner: number;       // player index
+  placedAt: number;
+  jelly: boolean;
   timer: number;       // seconds remaining (starts at 2.0)
   range: number;       // explosion range in tiles
   exploded: boolean;
@@ -13,9 +17,11 @@ export interface Bomb {
   sliding: boolean;
   slideDirection: 'up' | 'down' | 'left' | 'right' | null;
   slideSpeed: number;  // tiles per second
+  slideMode: BombSlideMode | null;
   /** Fractional position within the current slide (pixel-accurate movement) */
   slideX: number;      // fractional col offset from bomb.col
   slideY: number;      // fractional row offset from bomb.row
+  lastWarpIndex: number | null;
 }
 
 export interface Explosion {
@@ -33,12 +39,23 @@ export interface BombEvents {
 
 const BOMB_FUSE = 2.0;
 const EXPLOSION_DURATION = 0.5;
+const CONVEYOR_BOMB_SPEED = 1.4;
 
-function dirToDeltas(dir: 'up' | 'down' | 'left' | 'right'): { ddx: number; ddy: number } {
+export function dirToDeltas(dir: 'up' | 'down' | 'left' | 'right'): { ddx: number; ddy: number } {
   return {
     ddx: dir === 'left' ? -1 : dir === 'right' ? 1 : 0,
     ddy: dir === 'up'   ? -1 : dir === 'down'  ? 1 : 0,
   };
+}
+
+function reverseDirection(dir: 'up' | 'down' | 'left' | 'right'): 'up' | 'down' | 'left' | 'right' {
+  return dir === 'left'
+    ? 'right'
+    : dir === 'right'
+      ? 'left'
+      : dir === 'up'
+        ? 'down'
+        : 'up';
 }
 
 const DIRECTIONS: { dx: number; dy: number; name: Explosion['direction'] }[] = [
@@ -51,9 +68,29 @@ const DIRECTIONS: { dx: number; dy: number; name: Explosion['direction'] }[] = [
 export class BombManager {
   bombs: Bomb[] = [];
   explosions: Explosion[] = [];
+  private placementSequence = 0;
+
+  private getLiveBombAt(col: number, row: number): Bomb | undefined {
+    return this.bombs.find((bomb) => !bomb.exploded && bomb.col === col && bomb.row === row);
+  }
+
+  private getOldestLiveBomb(owner: number): Bomb | null {
+    let oldestBomb: Bomb | null = null;
+
+    for (const bomb of this.bombs) {
+      if (bomb.exploded || bomb.owner !== owner) {
+        continue;
+      }
+      if (!oldestBomb || bomb.placedAt < oldestBomb.placedAt) {
+        oldestBomb = bomb;
+      }
+    }
+
+    return oldestBomb;
+  }
 
   /** Place a bomb at grid position. Returns false if cell already has a bomb */
-  placeBomb(col: number, row: number, owner: number, range: number): boolean {
+  placeBomb(col: number, row: number, owner: number, range: number, jelly = false): boolean {
     if (this.hasBomb(col, row)) {
       return false;
     }
@@ -62,6 +99,8 @@ export class BombManager {
       col,
       row,
       owner,
+      placedAt: this.placementSequence++,
+      jelly,
       timer: BOMB_FUSE,
       range,
       exploded: false,
@@ -69,11 +108,30 @@ export class BombManager {
       sliding: false,
       slideDirection: null,
       slideSpeed: 6,
+      slideMode: null,
       slideX: 0,
       slideY: 0,
+      lastWarpIndex: null,
     });
 
     return true;
+  }
+
+  /** Detonate the oldest live bomb owned by the given player. */
+  triggerOldestBomb(owner: number, grid: GameGrid): BombEvents | null {
+    const oldestBomb = this.getOldestLiveBomb(owner);
+
+    if (!oldestBomb) {
+      return null;
+    }
+
+    const events: BombEvents = {
+      bricksDestroyed: [],
+      explosionPositions: [],
+    };
+    this.detonate(oldestBomb, grid, events);
+    this.bombs = this.bombs.filter((bomb) => !bomb.exploded);
+    return events;
   }
 
   /** Update all bombs and explosions. Returns events (brick destroyed, player killed positions) */
@@ -85,7 +143,12 @@ export class BombManager {
 
     // Move sliding bombs
     for (const bomb of this.bombs) {
-      if (!bomb.exploded && bomb.sliding && bomb.slideDirection) {
+      if (bomb.exploded) {
+        continue;
+      }
+      this.tryTeleportBomb(bomb, grid);
+      this.tryStartConveyorSlide(bomb, grid);
+      if (bomb.sliding && bomb.slideDirection) {
         this.updateSlidingBomb(bomb, dt, grid);
       }
     }
@@ -125,8 +188,13 @@ export class BombManager {
    * Start a bomb sliding in the given direction (called by player kick logic).
    * Returns true if the kick was applied.
    */
-  kickBomb(col: number, row: number, direction: 'up' | 'down' | 'left' | 'right', grid: GameGrid): boolean {
-    const bomb = this.bombs.find((b) => !b.exploded && b.col === col && b.row === row);
+  kickBomb(
+    col: number,
+    row: number,
+    direction: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+  ): boolean {
+    const bomb = this.getLiveBombAt(col, row);
     if (!bomb) return false;
 
     const { ddx, ddy } = dirToDeltas(direction);
@@ -136,10 +204,7 @@ export class BombManager {
     // Only start sliding if the very next cell is clear
     if (!this.isCellClearForSlide(nextCol, nextRow, grid)) return false;
 
-    bomb.sliding = true;
-    bomb.slideDirection = direction;
-    bomb.slideX = 0;
-    bomb.slideY = 0;
+    this.startSliding(bomb, direction, 'kick', 6);
     return true;
   }
 
@@ -150,11 +215,88 @@ export class BombManager {
     return !!cell && cell.type === CellContent.Empty && !this.hasBomb(col, row);
   }
 
+  private startSliding(
+    bomb: Bomb,
+    direction: 'up' | 'down' | 'left' | 'right',
+    mode: BombSlideMode,
+    speed: number,
+  ): void {
+    bomb.sliding = true;
+    bomb.slideDirection = direction;
+    bomb.slideMode = mode;
+    bomb.slideSpeed = speed;
+    bomb.slideX = 0;
+    bomb.slideY = 0;
+  }
+
   private stopSliding(bomb: Bomb): void {
     bomb.sliding = false;
     bomb.slideDirection = null;
+    bomb.slideMode = null;
     bomb.slideX = 0;
     bomb.slideY = 0;
+  }
+
+  private reverseJellyBomb(bomb: Bomb, grid: GameGrid): boolean {
+    if (bomb.slideMode !== 'kick' || !bomb.slideDirection || !bomb.jelly) {
+      return false;
+    }
+
+    const reversedDirection = reverseDirection(bomb.slideDirection);
+    const reversed = dirToDeltas(reversedDirection);
+    if (!this.isCellClearForSlide(bomb.col + reversed.ddx, bomb.row + reversed.ddy, grid)) {
+      return false;
+    }
+
+    this.startSliding(bomb, reversedDirection, 'kick', bomb.slideSpeed);
+    return true;
+  }
+
+  private tryStartConveyorSlide(bomb: Bomb, grid: GameGrid): void {
+    if (bomb.sliding) {
+      return;
+    }
+
+    const direction = grid.getConveyorDirection(bomb.col, bomb.row);
+    if (!direction) {
+      return;
+    }
+
+    const { ddx, ddy } = dirToDeltas(direction);
+    const nextCol = bomb.col + ddx;
+    const nextRow = bomb.row + ddy;
+    if (!this.isCellClearForSlide(nextCol, nextRow, grid)) {
+      return;
+    }
+
+    this.startSliding(bomb, direction, 'conveyor', CONVEYOR_BOMB_SPEED);
+  }
+
+  private tryTeleportBomb(bomb: Bomb, grid: GameGrid): void {
+    const warp = grid.getWarp(bomb.col, bomb.row);
+    if (!warp) {
+      bomb.lastWarpIndex = null;
+      return;
+    }
+
+    if (bomb.lastWarpIndex === warp.index) {
+      return;
+    }
+
+    const destination = grid.getWarpDestination(warp);
+    if (!destination || destination.index === warp.index) {
+      bomb.lastWarpIndex = warp.index;
+      return;
+    }
+
+    if (!this.isCellClearForSlide(destination.x, destination.y, grid)) {
+      return;
+    }
+
+    bomb.col = destination.x;
+    bomb.row = destination.y;
+    bomb.lastWarpIndex = destination.index;
+    this.stopSliding(bomb);
   }
 
   /** Advance a sliding bomb by dt seconds, stopping when it hits an obstacle. */
@@ -173,10 +315,33 @@ export class BombManager {
       bomb.row += ddy;
       bomb.slideX -= ddx;
       bomb.slideY -= ddy;
+      this.tryTeleportBomb(bomb, grid);
+      if (!bomb.sliding) {
+        return;
+      }
+
+      if (bomb.slideMode === 'conveyor') {
+        const nextDirection = grid.getConveyorDirection(bomb.col, bomb.row);
+        if (!nextDirection) {
+          this.stopSliding(bomb);
+          return;
+        }
+
+        const nextStep = dirToDeltas(nextDirection);
+        if (!this.isCellClearForSlide(bomb.col + nextStep.ddx, bomb.row + nextStep.ddy, grid)) {
+          this.stopSliding(bomb);
+          return;
+        }
+
+        bomb.slideDirection = nextDirection;
+        continue;
+      }
 
       // Check if the cell after that is clear; if not, stop here
       if (!this.isCellClearForSlide(bomb.col + ddx, bomb.row + ddy, grid)) {
-        this.stopSliding(bomb);
+        if (!this.reverseJellyBomb(bomb, grid)) {
+          this.stopSliding(bomb);
+        }
         return;
       }
     }
@@ -255,7 +420,7 @@ export class BombManager {
 
   /** Check if a position has a bomb */
   hasBomb(col: number, row: number): boolean {
-    return this.bombs.some((b) => !b.exploded && b.col === col && b.row === row);
+    return !!this.getLiveBombAt(col, row);
   }
 
   /** Check if a position has a bomb that blocks a specific player (respects grace) */

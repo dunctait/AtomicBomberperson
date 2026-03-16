@@ -11,6 +11,8 @@ export enum TileType {
   Brick = 2,
 }
 
+export type ConveyorDirection = 'up' | 'down' | 'left' | 'right';
+
 export interface SpawnPoint {
   player: number;
   x: number;
@@ -27,12 +29,27 @@ export interface PowerupSetting {
   forbidden: boolean;
 }
 
+export interface ConveyorTile {
+  x: number;
+  y: number;
+  direction: ConveyorDirection;
+}
+
+export interface WarpTile {
+  index: number;
+  target: number;
+  x: number;
+  y: number;
+}
+
 export interface ParsedScheme {
   name: string;
   brickDensity: number;
   grid: TileType[][];  // [row][col], 11 rows x 15 cols
   spawns: SpawnPoint[];
   powerups: PowerupSetting[];
+  conveyors: ConveyorTile[];
+  warps: WarpTile[];
 }
 
 const GRID_COLS = 15;
@@ -60,12 +77,26 @@ const TILE_CHARS: Record<string, TileType> = {
   ':': TileType.Brick,
 };
 
+const CONVEYOR_DIRECTIONS: Record<string, ConveyorDirection> = {
+  N: 'up',
+  S: 'down',
+  W: 'left',
+  E: 'right',
+  U: 'up',
+  D: 'down',
+  L: 'left',
+  R: 'right',
+};
+
 export function parseScheme(text: string): ParsedScheme {
   let name = '';
   let brickDensity = 0;
   const grid: TileType[][] = [];
   const spawns: SpawnPoint[] = [];
   const powerups: PowerupSetting[] = [];
+  const conveyors: ConveyorTile[] = [];
+  const warps: WarpTile[] = [];
+  let nextWarpIndex = 0;
 
   // Initialise grid to empty
   for (let r = 0; r < GRID_ROWS; r++) {
@@ -82,14 +113,16 @@ export function parseScheme(text: string): ParsedScheme {
       continue;
     }
 
-    if (!trimmed.startsWith('-')) {
+    const taggedLine = trimmed.startsWith('-');
+    if (!taggedLine && !/^[A-Za-z]/.test(trimmed)) {
       continue;
     }
 
-    // Remove leading '-' and split by comma
-    const content = trimmed.substring(1);
-    const typeLetter = content[0];
-    const parts = content.substring(2).split(',');
+    const content = taggedLine ? trimmed.substring(1) : trimmed;
+    const typeLetter = content[0]?.toUpperCase();
+    const parts = taggedLine
+      ? content.substring(2).split(',')
+      : content.substring(1).split(/\s+/).filter(Boolean);
 
     switch (typeLetter) {
       case 'V':
@@ -142,8 +175,33 @@ export function parseScheme(text: string): ParsedScheme {
         });
         break;
       }
+
+      case 'C': {
+        const direction = CONVEYOR_DIRECTIONS[(parts[0] ?? '').toUpperCase()];
+        const x = parseInt(parts[1], 10);
+        const y = parseInt(parts[2], 10);
+        if (direction && x >= 0 && x < GRID_COLS && y >= 0 && y < GRID_ROWS) {
+          conveyors.push({ direction, x, y });
+        }
+        break;
+      }
+
+      case 'W': {
+        const target = parseInt(parts[0], 10);
+        const x = parseInt(parts[1], 10);
+        const y = parseInt(parts[2], 10);
+        if (
+          Number.isInteger(target) &&
+          x >= 0 && x < GRID_COLS &&
+          y >= 0 && y < GRID_ROWS
+        ) {
+          warps.push({ index: nextWarpIndex, target, x, y });
+          nextWarpIndex += 1;
+        }
+        break;
+      }
     }
   }
 
-  return { name, brickDensity, grid, spawns, powerups };
+  return { name, brickDensity, grid, spawns, powerups, conveyors, warps };
 }

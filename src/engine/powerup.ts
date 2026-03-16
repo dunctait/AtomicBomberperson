@@ -1,6 +1,6 @@
 import { type GameGrid, GRID_COLS, GRID_ROWS, CellContent } from './game-grid';
-import { type PowerupSetting } from '../assets/parsers/sch-parser';
-import { type PlayerStats } from './player';
+import { type ParsedScheme, type PowerupSetting } from '../assets/parsers/sch-parser';
+import { type DiseaseEffect, Player } from './player';
 
 export enum PowerupType {
   ExtraBomb = 0,
@@ -147,8 +147,37 @@ export class PowerupManager {
   }
 }
 
-/** Apply a collected powerup to a player's stats */
-export function applyPowerup(type: PowerupType, stats: PlayerStats): void {
+const DISEASE_DURATION_SECONDS = 10;
+const SUPER_DISEASE_DURATION_SECONDS = 15;
+const DISEASE_EFFECTS: DiseaseEffect[] = ['slow', 'reverse'];
+
+function applyDiseasePowerup(player: Player, duration: number): void {
+  const picked = DISEASE_EFFECTS[Math.floor(Math.random() * DISEASE_EFFECTS.length)];
+  player.applyDisease(picked, duration);
+}
+
+function isPowerupType(value: number): value is PowerupType {
+  return typeof PowerupType[value] === 'string';
+}
+
+export function applySchemeStartingInventory(
+  player: Player,
+  schemePowerups: ParsedScheme['powerups'],
+): void {
+  for (const powerup of schemePowerups) {
+    if (!isPowerupType(powerup.id) || powerup.bornWith <= 0) {
+      continue;
+    }
+
+    for (let count = 0; count < powerup.bornWith; count += 1) {
+      applyPowerup(powerup.id, player);
+    }
+  }
+}
+
+/** Apply a collected powerup to a player */
+export function applyPowerup(type: PowerupType, player: Player): void {
+  const { stats } = player;
   switch (type) {
     case PowerupType.ExtraBomb:
       stats.maxBombs += 1;
@@ -191,12 +220,15 @@ export function applyPowerup(type: PowerupType, stats: PlayerStats): void {
         PowerupType.Grab,
       ];
       const picked = beneficial[Math.floor(Math.random() * beneficial.length)];
-      applyPowerup(picked, stats);
+      applyPowerup(picked, player);
       break;
     }
     case PowerupType.Disease:
+      applyDiseasePowerup(player, DISEASE_DURATION_SECONDS);
+      break;
     case PowerupType.SuperDisease:
-      // Future: apply disease effect
+      player.applyDisease('slow', SUPER_DISEASE_DURATION_SECONDS);
+      player.applyDisease('reverse', SUPER_DISEASE_DURATION_SECONDS);
       break;
   }
 }

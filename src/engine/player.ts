@@ -1,8 +1,9 @@
 import { GameGrid, GRID_COLS, GRID_ROWS } from './game-grid';
-import { BombManager } from './bomb';
+import { BombManager, dirToDeltas } from './bomb';
 
 export type PlayerType = 'human' | 'ai' | 'off';
 export type Direction = 'up' | 'down' | 'left' | 'right' | 'none';
+export type DiseaseEffect = 'slow' | 'reverse';
 
 export interface PlayerStats {
   maxBombs: number;
@@ -23,6 +24,23 @@ const HITBOX = 0.6;
 const HALF = HITBOX / 2;
 /** Threshold for corner-slide nudging (how far off-center is tolerable). */
 const SLIDE_THRESHOLD = 0.45;
+const SLOW_DISEASE_MULTIPLIER = 0.55;
+const CONVEYOR_SPEED = 1.4;
+
+function getOppositeDirection(dir: Direction): Direction {
+  switch (dir) {
+    case 'up':
+      return 'down';
+    case 'down':
+      return 'up';
+    case 'left':
+      return 'right';
+    case 'right':
+      return 'left';
+    default:
+      return dir;
+  }
+}
 
 export class Player {
   index: number;
@@ -48,6 +66,9 @@ export class Player {
 
   // Ordered stack of pressed directions for last-pressed-wins priority
   private directionStack: Direction[] = [];
+  private slowDiseaseTimer = 0;
+  private reverseDiseaseTimer = 0;
+  private activeWarpIndex: number | null = null;
 
   constructor(index: number, type: PlayerType, spawnX: number, spawnY: number) {
     this.index = index;
@@ -111,10 +132,14 @@ export class Player {
   /** The current desired movement direction (last pressed wins). */
   private getDesiredDirection(): Direction {
     if (this.directionStack.length === 0) return 'none';
-    return this.directionStack[this.directionStack.length - 1];
+    const direction = this.directionStack[this.directionStack.length - 1];
+    return this.hasReverseDisease() ? getOppositeDirection(direction) : direction;
   }
 
   update(dt: number, grid: GameGrid, bombs: BombManager): void {
+    this.slowDiseaseTimer = Math.max(0, this.slowDiseaseTimer - dt);
+    this.reverseDiseaseTimer = Math.max(0, this.reverseDiseaseTimer - dt);
+
     if (!this.alive) return;
 
     const dir = this.getDesiredDirection();
@@ -125,9 +150,15 @@ export class Player {
       this.facing = dir;
     }
 
-    if (!this.moving) return;
+    if (!this.moving) {
+      this.applyConveyorMotion(dt, grid, bombs);
+      this.applyWarpTeleport(grid, bombs);
+      this.x = Math.max(0, Math.min(GRID_COLS - 1, this.x));
+      this.y = Math.max(0, Math.min(GRID_ROWS - 1, this.y));
+      return;
+    }
 
-    const speed = this.stats.speed * dt;
+    const speed = this.getMovementSpeed() * dt;
     let dx = 0;
     let dy = 0;
 
@@ -155,9 +186,92 @@ export class Player {
       }
     }
 
+    this.applyConveyorMotion(dt, grid, bombs);
+    this.applyWarpTeleport(grid, bombs);
+
     // Clamp position so player stays within the grid
     this.x = Math.max(0, Math.min(GRID_COLS - 1, this.x));
     this.y = Math.max(0, Math.min(GRID_ROWS - 1, this.y));
+  }
+
+  private applyConveyorMotion(dt: number, grid: GameGrid, bombs: BombManager): void {
+    const cellCol = Math.round(this.x);
+    const cellRow = Math.round(this.y);
+    const direction = grid.getConveyorDirection(cellCol, cellRow);
+    if (!direction) {
+      return;
+    }
+
+    const conveyorStep = CONVEYOR_SPEED * dt;
+    let targetX = this.x;
+    let targetY = this.y;
+    const centerX = cellCol;
+    const centerY = cellRow;
+
+    if (direction === 'left' || direction === 'right') {
+      const alignY = Math.max(-conveyorStep, Math.min(conveyorStep, centerY - this.y));
+      targetY += alignY;
+      targetX += direction === 'left' ? -conveyorStep : conveyorStep;
+    } else {
+      const alignX = Math.max(-conveyorStep, Math.min(conveyorStep, centerX - this.x));
+      targetX += alignX;
+      targetY += direction === 'up' ? -conveyorStep : conveyorStep;
+    }
+
+    if (this.canMoveTo(targetX, targetY, grid, bombs)) {
+      this.x = Math.max(0, Math.min(GRID_COLS - 1, targetX));
+      this.y = Math.max(0, Math.min(GRID_ROWS - 1, targetY));
+    }
+  }
+
+  private applyWarpTeleport(grid: GameGrid, bombs: BombManager): void {
+    const cellCol = Math.round(this.x);
+    const cellRow = Math.round(this.y);
+    const warp = grid.getWarp(cellCol, cellRow);
+
+    if (!warp) {
+      this.activeWarpIndex = null;
+      return;
+    }
+
+    if (this.activeWarpIndex === warp.index) {
+      return;
+    }
+
+    const destination = grid.getWarpDestination(warp);
+    if (!destination || destination.index === warp.index) {
+      this.activeWarpIndex = warp.index;
+      return;
+    }
+
+    if (!this.canMoveTo(destination.x, destination.y, grid, bombs)) {
+      return;
+    }
+
+    this.x = destination.x;
+    this.y = destination.y;
+    this.activeWarpIndex = destination.index;
+  }
+
+  applyDisease(effect: DiseaseEffect, duration: number): void {
+    if (effect === 'slow') {
+      this.slowDiseaseTimer = Math.max(this.slowDiseaseTimer, duration);
+      return;
+    }
+
+    this.reverseDiseaseTimer = Math.max(this.reverseDiseaseTimer, duration);
+  }
+
+  hasSlowDisease(): boolean {
+    return this.slowDiseaseTimer > 0;
+  }
+
+  hasReverseDisease(): boolean {
+    return this.reverseDiseaseTimer > 0;
+  }
+
+  private getMovementSpeed(): number {
+    return this.stats.speed * (this.hasSlowDisease() ? SLOW_DISEASE_MULTIPLIER : 1);
   }
 
   getGridPos(): { col: number; row: number } {
@@ -251,8 +365,7 @@ export class Player {
     grid: GameGrid,
     bombs: BombManager,
   ): boolean {
-    const ddx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0;
-    const ddy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0;
+    const { ddx, ddy } = dirToDeltas(dir);
 
     // The cell directly in front of the player in the movement direction
     const frontCol = Math.round(this.x) + ddx;
@@ -268,5 +381,6 @@ export class Player {
     this.alive = false;
     this.moving = false;
     this.moveDirection = 'none';
+    this.activeWarpIndex = null;
   }
 }

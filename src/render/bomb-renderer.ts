@@ -1,15 +1,16 @@
 import type { Bomb, Explosion } from '../engine/bomb';
 import { loadAnimationWithFallback } from './render-utils';
+import { PLAYER_COLORS } from './player-renderer';
 
 /**
  * EXPLODE.ANI / FLAME.ANI frame layout (5 animation frames each):
- *  0- 4: END   — right end cap
- *  5- 9: ENDU  — up end cap
- * 10-14: SQUARE — center (bomb origin)
- * 15-19: STREAM — horizontal stream
- * 20-24: STRMU  — vertical stream
- * 25-29: ENDD  — down end cap
- * 30-34: ENDL  — left end cap
+ *  0- 4: END   - right end cap
+ *  5- 9: ENDU  - up end cap
+ * 10-14: SQUARE - center (bomb origin)
+ * 15-19: STREAM - horizontal stream
+ * 20-24: STRMU  - vertical stream
+ * 25-29: ENDD  - down end cap
+ * 30-34: ENDL  - left end cap
  */
 const FLAME_FRAMES_PER_TYPE = 5;
 const FLAME_RIGHT_END = 0;
@@ -24,14 +25,13 @@ const EXPLOSION_DURATION = 0.5;
 
 /** Base animation speed for bomb sprites (frames per second) when fuse is full. */
 const BOMB_ANIM_FPS_BASE = 6;
-/** Maximum animation speed as the bomb fuse nears zero (frames per second). */
-const BOMB_ANIM_FPS_MAX = 20;
-/** Full fuse duration in seconds — must match BOMB_FUSE in bomb.ts. */
+/** Maximum speed near detonation. Kept subtle to avoid "fast ticking" feel. */
+const BOMB_ANIM_FPS_MAX = 8;
+/** Full fuse duration in seconds; must match BOMB_FUSE in bomb.ts. */
 const BOMB_FUSE_DURATION = 2.0;
 
 export class BombRenderer {
   private bombFrames: HTMLCanvasElement[] | null = null;
-  private bombHotspots: { x: number; y: number }[] | null = null;
   private flameFrames: HTMLCanvasElement[] | null = null;
   private loadStarted = false;
 
@@ -47,13 +47,45 @@ export class BombRenderer {
     void loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1).then((anim) => {
       if (anim) {
         this.bombFrames = anim.frames;
-        this.bombHotspots = anim.hotspots;
       }
     });
 
     void loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35).then((anim) => {
       if (anim) this.flameFrames = anim.frames;
     });
+  }
+
+  private getFuseProgress(bombTimer: number): number {
+    return 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
+  }
+
+  private getBombAnimationSpeed(bombTimer: number): number {
+    const fuseProgress = this.getFuseProgress(bombTimer);
+    // Very subtle fuse ramp: mostly steady, slightly faster near detonation.
+    return BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
+  }
+
+  private getExplosionBaseFrame(exp: Explosion): number {
+    if (exp.direction === 'center') {
+      return FLAME_CENTER;
+    }
+
+    if (!exp.isEnd) {
+      return exp.direction === 'left' || exp.direction === 'right'
+        ? FLAME_H_STREAM
+        : FLAME_V_STREAM;
+    }
+
+    switch (exp.direction) {
+      case 'right':
+        return FLAME_RIGHT_END;
+      case 'up':
+        return FLAME_UP_END;
+      case 'down':
+        return FLAME_DOWN_END;
+      case 'left':
+        return FLAME_LEFT_END;
+    }
   }
 
   /** Draw all bombs */
@@ -70,10 +102,10 @@ export class BombRenderer {
       const cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
       const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
-      if (this.bombFrames && this.bombHotspots) {
-        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
+      if (this.bombFrames) {
+        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       } else {
-        this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
+        this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       }
     }
   }
@@ -87,51 +119,56 @@ export class BombRenderer {
    */
   private renderImportedBomb(
     ctx: CanvasRenderingContext2D,
-    cx: number, cy: number,
-    tileW: number, tileH: number,
+    cx: number,
+    cy: number,
+    tileW: number,
+    tileH: number,
     time: number,
     bombTimer: number,
+    owner: number,
   ): void {
     const frames = this.bombFrames!;
-    const hotspots = this.bombHotspots!;
 
-    // Speed increases linearly as the fuse burns down:
-    //   timer == BOMB_FUSE_DURATION  → BOMB_ANIM_FPS_BASE
-    //   timer == 0                   → BOMB_ANIM_FPS_MAX
-    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
-    const fps = BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
-
-    const frameIndex = Math.floor(time * fps) % frames.length;
+    const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bombTimer);
+    const fps = this.getBombAnimationSpeed(bombTimer);
+    const frameIndex = Math.floor(fuseElapsed * fps) % frames.length;
     const frame = frames[frameIndex];
-    const hotspot = hotspots[frameIndex] ?? hotspots[0] ?? { x: 0, y: 0 };
-
     // Scale bomb sprite to fit within one tile while preserving aspect ratio.
     const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
     const drawW = frame.width * scale;
     const drawH = frame.height * scale;
-    const drawX = cx - hotspot.x * scale;
-    const drawY = cy - hotspot.y * scale;
+    // Use geometric centering for bomb placement so bomb and explosion origins align.
+    const drawX = cx - drawW / 2;
+    const drawY = cy - drawH / 2;
 
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(frame, drawX, drawY, drawW, drawH);
+    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.38;
+    ctx.fillStyle = ownerColor;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
   /**
    * Fallback bomb rendering using canvas primitives.
-   * Pulse speed increases as the fuse burns down to mirror the imported-sprite behaviour.
+   * Pulse speed increases as the fuse burns down to mirror the imported-sprite behavior.
    */
   private renderFallbackBomb(
     ctx: CanvasRenderingContext2D,
-    cx: number, cy: number,
-    tileW: number, tileH: number,
+    cx: number,
+    cy: number,
+    tileW: number,
+    tileH: number,
     time: number,
     bombTimer: number,
+    owner: number,
   ): void {
-    // Mirror the imported-sprite speed ramp for visual consistency.
-    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
-    const pulseSpeed = BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
+    const pulseSpeed = this.getBombAnimationSpeed(bombTimer);
     const pulsePhase = Math.sin(time * pulseSpeed);
     const scale = 0.7 + 0.3 * (0.5 + 0.5 * pulsePhase);
     const radius = Math.min(tileW, tileH) * 0.35 * scale;
@@ -145,9 +182,10 @@ export class BombRenderer {
     // Bomb body
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = '#1a1a1a';
+    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
+    ctx.fillStyle = ownerColor;
     ctx.fill();
-    ctx.strokeStyle = '#000';
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
@@ -188,33 +226,20 @@ export class BombRenderer {
 
   private renderImportedFlame(
     ctx: CanvasRenderingContext2D,
-    x: number, y: number,
-    tileW: number, tileH: number,
+    x: number,
+    y: number,
+    tileW: number,
+    tileH: number,
     exp: Explosion,
   ): void {
     const frames = this.flameFrames!;
+    const baseIndex = this.getExplosionBaseFrame(exp);
 
-    // Pick the base frame index based on direction and end/stream
-    let baseIndex: number;
-    if (exp.direction === 'center') {
-      baseIndex = FLAME_CENTER;
-    } else if (exp.isEnd) {
-      switch (exp.direction) {
-        case 'right': baseIndex = FLAME_RIGHT_END; break;
-        case 'up':    baseIndex = FLAME_UP_END; break;
-        case 'down':  baseIndex = FLAME_DOWN_END; break;
-        case 'left':  baseIndex = FLAME_LEFT_END; break;
-      }
-    } else {
-      // Stream (middle) — horizontal or vertical
-      baseIndex = (exp.direction === 'left' || exp.direction === 'right')
-        ? FLAME_H_STREAM
-        : FLAME_V_STREAM;
-    }
-
-    // Pick animation frame based on timer progress (0.5s → 0.0s)
     const progress = 1 - (exp.timer / EXPLOSION_DURATION);
-    const animFrame = Math.min(FLAME_FRAMES_PER_TYPE - 1, Math.floor(progress * FLAME_FRAMES_PER_TYPE));
+    const animFrame = Math.min(
+      FLAME_FRAMES_PER_TYPE - 1,
+      Math.floor(progress * FLAME_FRAMES_PER_TYPE),
+    );
     const frameIndex = Math.min(frames.length - 1, baseIndex + animFrame);
 
     const frame = frames[frameIndex];
@@ -226,16 +251,22 @@ export class BombRenderer {
 
   private renderFallbackFlame(
     ctx: CanvasRenderingContext2D,
-    x: number, y: number,
-    tileW: number, tileH: number,
+    x: number,
+    y: number,
+    tileW: number,
+    tileH: number,
     exp: Explosion,
   ): void {
-    const intensity = exp.timer / 0.5;
+    const intensity = exp.timer / EXPLOSION_DURATION;
 
     if (exp.direction === 'center') {
       const gradient = ctx.createRadialGradient(
-        x + tileW / 2, y + tileH / 2, 0,
-        x + tileW / 2, y + tileH / 2, tileW * 0.5,
+        x + tileW / 2,
+        y + tileH / 2,
+        0,
+        x + tileW / 2,
+        y + tileH / 2,
+        tileW * 0.5,
       );
       gradient.addColorStop(0, `rgba(255, 255, 200, ${intensity})`);
       gradient.addColorStop(0.5, `rgba(255, 200, 50, ${intensity})`);
@@ -243,8 +274,12 @@ export class BombRenderer {
       ctx.fillStyle = gradient;
     } else {
       const gradient = ctx.createRadialGradient(
-        x + tileW / 2, y + tileH / 2, 0,
-        x + tileW / 2, y + tileH / 2, tileW * 0.5,
+        x + tileW / 2,
+        y + tileH / 2,
+        0,
+        x + tileW / 2,
+        y + tileH / 2,
+        tileW * 0.5,
       );
       gradient.addColorStop(0, `rgba(255, 220, 50, ${intensity})`);
       gradient.addColorStop(0.6, `rgba(255, 120, 0, ${intensity * 0.9})`);

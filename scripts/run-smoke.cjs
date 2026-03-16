@@ -22,12 +22,26 @@ const { showAssetLoaderScreen } = require('../src/ui/asset-loader-screen.ts');
 const { createTitleScreen } = require('../src/screens/title-screen.ts');
 const { createMainMenu } = require('../src/screens/main-menu.ts');
 const { createGameSetup } = require('../src/screens/game-setup.ts');
+const { createMatchVictory } = require('../src/screens/match-victory.ts');
+const { createRoundResults } = require('../src/screens/round-results.ts');
 const { gameConfig } = require('../src/screens/game-config.ts');
 const {
   createGameplayScreen,
   getGameplayMapMeta,
+  renderPlayerHudRow,
   resolveSchemeFile,
 } = require('../src/screens/gameplay-screen.ts');
+const { resetMatch, matchState } = require('../src/engine/match-manager.ts');
+const { ParticleSystem } = require('../src/engine/particles.ts');
+const { Player } = require('../src/engine/player.ts');
+const { GameGrid } = require('../src/engine/game-grid.ts');
+const { BombManager } = require('../src/engine/bomb.ts');
+const {
+  applyPowerup,
+  applySchemeStartingInventory,
+  PowerupType,
+} = require('../src/engine/powerup.ts');
+const { parseScheme } = require('../src/assets/parsers/sch-parser.ts');
 const { clearAll, storeFile, storeMetadata } = require('../src/assets/asset-db.ts');
 const { assets } = require('../src/assets/asset-registry.ts');
 
@@ -57,6 +71,64 @@ function createLocalStorage() {
 
 function setViewport(width, height) {
   globalThis.__SMOKE_VIEWPORT__ = { width, height };
+}
+
+function createMockCanvasGradient() {
+  return {
+    addColorStop() {},
+  };
+}
+
+function createMockImageData(width = 1, height = 1) {
+  return {
+    data: new Uint8ClampedArray(width * height * 4),
+    width,
+    height,
+  };
+}
+
+function createMockCanvasContext() {
+  return {
+    __translateCalls: [],
+    fillStyle: '#000',
+    strokeStyle: '#000',
+    lineWidth: 1,
+    font: '10px monospace',
+    textAlign: 'left',
+    textBaseline: 'alphabetic',
+    globalAlpha: 1,
+    filter: 'none',
+    shadowColor: 'transparent',
+    shadowBlur: 0,
+    imageSmoothingEnabled: false,
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    closePath() {},
+    fill() {},
+    stroke() {},
+    fillRect() {},
+    clearRect() {},
+    strokeRect() {},
+    arc() {},
+    ellipse() {},
+    translate(x, y) {
+      this.__translateCalls.push([x, y]);
+    },
+    scale() {},
+    rotate() {},
+    fillText() {},
+    save() {},
+    restore() {},
+    drawImage() {},
+    putImageData() {},
+    getImageData(width, height) {
+      return createMockImageData(width, height);
+    },
+    createRadialGradient() {
+      return createMockCanvasGradient();
+    },
+  };
 }
 
 function installDomEnvironment() {
@@ -92,31 +164,10 @@ function installDomEnvironment() {
   const elementProto = window.HTMLElement.prototype;
   const canvasProto = window.HTMLCanvasElement.prototype;
   canvasProto.getContext = function getContext() {
-    return {
-      fillStyle: '#000',
-      strokeStyle: '#000',
-      lineWidth: 1,
-      font: '10px monospace',
-      textAlign: 'left',
-      textBaseline: 'alphabetic',
-      globalAlpha: 1,
-      filter: 'none',
-      imageSmoothingEnabled: false,
-      beginPath() {},
-      moveTo() {},
-      lineTo() {},
-      closePath() {},
-      fill() {},
-      stroke() {},
-      fillRect() {},
-      strokeRect() {},
-      arc() {},
-      fillText() {},
-      save() {},
-      restore() {},
-      drawImage() {},
-      putImageData() {},
-    };
+    if (!this.__mockContext2d) {
+      this.__mockContext2d = createMockCanvasContext();
+    }
+    return this.__mockContext2d;
   };
   elementProto.getBoundingClientRect = function getBoundingClientRect() {
     if (this.classList.contains('stage-shell')) {
@@ -314,6 +365,10 @@ async function testGameplayMapHudShowsImportedSelection() {
           '-S,1,13,1,1',
           '-P,0,1,0,0,0,Extra bomb',
           '-P,2,0,1,3,1,Disease',
+          '-C,N,4,5',
+          '-C,E,5,5',
+          '-W,1,8,8',
+          '-W,0,10,8',
         ].join('\n'),
       ).buffer,
     );
@@ -345,9 +400,10 @@ async function testGameplayMapHudShowsImportedSelection() {
 
     assert.equal(container.querySelector('.gameplay-map-name')?.textContent, 'MAP CASTLE COURT');
     assert.equal(container.querySelector('.gameplay-map-source')?.textContent, 'IMPORTED CASTLE.SCH');
+    assert.equal(container.querySelector('.gameplay-scheme-summary')?.style.display ?? '', '');
     assert.equal(
       container.querySelector('.gameplay-scheme-summary')?.textContent,
-      'SPAWNS 2 | TEAMS 2 | POWERUPS 1 ON / 1 OFF',
+      'SPAWNS 2 | TEAMS 2 | POWERUPS 1 ON / 1 OFF | CONVEYORS 2 (U1/R1) | WARPS 2 (>0:1/>1:1)',
     );
     assert.equal(
       container.querySelector('.gameplay-template-summary')?.textContent,
@@ -366,6 +422,14 @@ async function testGameplayMapHudShowsImportedSelection() {
       'START WITH EXTRA BOMB x1 | OVERRIDES DISEASE=3',
     );
     assert.equal(container.querySelector('.gameplay-hud')?.classList.contains('hidden'), false);
+    assert.match(
+      container.querySelector('.gameplay-player-hud')?.textContent ?? '',
+      /P1B:2F:2S:3\.0/,
+    );
+    assert.match(
+      container.querySelector('.gameplay-player-hud')?.textContent ?? '',
+      /P2B:2F:2S:3\.0/,
+    );
 
     gameplayScreen.onExit();
   });
@@ -378,18 +442,875 @@ async function testLockedMenuItems() {
     const menuScreen = createMainMenu((state) => transitions.push(state));
     menuScreen.onEnter(container);
 
-    assert.equal(container.querySelectorAll('.menu-item--locked').length, 6);
+    assert.equal(container.querySelectorAll('.menu-item--locked').length, 5);
     assert.ok(container.querySelector('.menu-item--locked .menu-lock'));
 
     menuScreen.onKeyDown({ key: 'ArrowDown' });
-    assert.match(container.querySelectorAll('.menu-item')[1]?.className ?? '', /menu-item--selected/);
+    assert.match(container.querySelectorAll('.menu-item')[6]?.className ?? '', /menu-item--selected/);
 
-    menuScreen.onKeyDown({ key: 'Enter' });
+    click(container.querySelectorAll('.menu-item')[1]);
     assert.equal(container.querySelector('.menu-toast')?.textContent, 'START NETWORK GAME locked');
     assert.equal(container.querySelector('.setup-screen'), null);
     assert.deepEqual(transitions, []);
 
     menuScreen.onExit();
+  });
+}
+
+async function testRoundResultsAdvancesToNextRound() {
+  await withDom(async () => {
+    resetMatch(2, 3);
+    matchState.roundNumber = 2;
+    matchState.lastRoundWinner = 1;
+    matchState.scores[1] = 1;
+
+    const transitions = [];
+    const container = createContainer();
+    const resultsScreen = createRoundResults((state) => transitions.push(state));
+    resultsScreen.onEnter(container);
+    resultsScreen.onUpdate(0.25);
+    assert.match(
+      container.querySelector('.results-round-winner')?.getAttribute('style') ?? '',
+      /transform:\s*scale\(/i,
+    );
+
+    assert.equal(container.querySelector('.results-heading')?.textContent, 'ROUND 2 RESULTS');
+    assert.equal(
+      container.querySelector('.results-round-winner')?.textContent,
+      'PLAYER 2 WINS THE ROUND!',
+    );
+    assert.equal(
+      container.querySelector('.results-prompt')?.textContent,
+      'ENTER/SPACE — NEXT ROUND',
+    );
+    assert.match(
+      container.querySelector('.results-player-row--winner .results-crown')?.textContent ?? '',
+      /★/,
+    );
+
+    resultsScreen.onKeyDown({ key: ' ' });
+    assert.deepEqual(transitions, ['gameplay']);
+    assert.equal(matchState.roundNumber, 2);
+    assert.deepEqual(matchState.scores, [0, 1]);
+    assert.equal(matchState.lastRoundWinner, 1);
+    assert.equal(matchState.matchWinner, -1);
+
+    resultsScreen.onExit();
+  });
+}
+
+async function testRoundResultsEnterCarriesProgressIntoNextGameplayRound() {
+  await withDom(async () => {
+    gameConfig.map = 'BASIC';
+    gameConfig.mapFile = null;
+    gameConfig.winsRequired = 3;
+    gameConfig.players = [{ type: 'human' }, { type: 'human' }];
+
+    resetMatch(2, 3);
+    matchState.roundNumber = 2;
+    matchState.lastRoundWinner = 1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 2;
+
+    const transitions = [];
+    const resultsContainer = createContainer();
+    const resultsScreen = createRoundResults((state) => transitions.push(state));
+    resultsScreen.onEnter(resultsContainer);
+
+    resultsScreen.onKeyDown({ key: 'Enter' });
+    assert.deepEqual(transitions, ['gameplay']);
+    assert.equal(matchState.roundNumber, 2);
+    assert.deepEqual(matchState.scores, [1, 2]);
+    assert.equal(matchState.lastRoundWinner, 1);
+    assert.equal(matchState.matchWinner, -1);
+
+    resultsScreen.onExit();
+
+    const gameplayContainer = createContainer();
+    const gameplayScreen = createGameplayScreen(() => {});
+    gameplayScreen.onEnter(gameplayContainer);
+    await flush(6);
+
+    assert.equal(matchState.roundNumber, 3);
+    assert.deepEqual(matchState.scores, [1, 2]);
+    assert.equal(matchState.lastRoundWinner, 1);
+    assert.equal(matchState.matchWinner, -1);
+
+    gameplayScreen.onExit();
+  });
+}
+
+async function testRoundResultsClickAdvancesToNextRound() {
+  await withDom(async () => {
+    resetMatch(2, 3);
+    matchState.roundNumber = 2;
+    matchState.lastRoundWinner = 1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 2;
+
+    const transitions = [];
+    const container = createContainer();
+    const resultsScreen = createRoundResults((state) => transitions.push(state));
+    resultsScreen.onEnter(container);
+
+    assert.equal(
+      container.querySelector('.results-hint')?.textContent,
+      'CLICK/TAP to confirm | ESC to quit to menu',
+    );
+
+    click(container.querySelector('.results-panel'));
+    click(container.querySelector('.results-heading'));
+    assert.deepEqual(transitions, ['gameplay']);
+    assert.equal(matchState.roundNumber, 2);
+    assert.deepEqual(matchState.scores, [1, 2]);
+    assert.equal(matchState.lastRoundWinner, 1);
+
+    resultsScreen.onExit();
+  });
+}
+
+async function testRoundResultsIgnoresRepeatedEnterUntilFreshPress() {
+  await withDom(async () => {
+    resetMatch(2, 3);
+    matchState.roundNumber = 2;
+    matchState.lastRoundWinner = 1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 2;
+
+    const transitions = [];
+    const container = createContainer();
+    const resultsScreen = createRoundResults((state) => transitions.push(state));
+    resultsScreen.onEnter(container);
+
+    resultsScreen.onKeyDown({ key: 'Enter', repeat: true });
+    resultsScreen.onKeyDown({ key: 'Enter', repeat: true });
+    assert.deepEqual(transitions, []);
+    assert.equal(matchState.roundNumber, 2);
+    assert.deepEqual(matchState.scores, [1, 2]);
+    assert.equal(matchState.lastRoundWinner, 1);
+    assert.equal(matchState.matchWinner, -1);
+
+    resultsScreen.onKeyDown({ key: 'Enter' });
+    resultsScreen.onKeyDown({ key: 'Enter', repeat: true });
+    resultsScreen.onKeyDown({ key: 'Escape', repeat: true });
+    assert.deepEqual(transitions, ['gameplay']);
+    assert.equal(matchState.roundNumber, 2);
+    assert.deepEqual(matchState.scores, [1, 2]);
+    assert.equal(matchState.lastRoundWinner, 1);
+    assert.equal(matchState.matchWinner, -1);
+
+    resultsScreen.onExit();
+  });
+}
+
+async function testRoundResultsTransitionGuardResetsAfterReentry() {
+  await withDom(async () => {
+    resetMatch(2, 3);
+    matchState.roundNumber = 2;
+    matchState.lastRoundWinner = 1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 2;
+
+    const transitions = [];
+    const firstContainer = createContainer();
+    const firstScreen = createRoundResults((state) => transitions.push(`first:${state}`));
+    firstScreen.onEnter(firstContainer);
+    firstScreen.onKeyDown({ key: 'Enter' });
+    assert.deepEqual(transitions, ['first:gameplay']);
+    firstScreen.onExit();
+
+    const secondContainer = createContainer();
+    const secondScreen = createRoundResults((state) => transitions.push(`second:${state}`));
+    secondScreen.onEnter(secondContainer);
+    secondScreen.onKeyDown({ key: 'Enter' });
+    assert.deepEqual(transitions, ['first:gameplay', 'second:gameplay']);
+    secondScreen.onExit();
+  });
+}
+
+async function testRoundResultsDrawExitsToMenu() {
+  await withDom(async () => {
+    resetMatch(3, 2);
+    matchState.roundNumber = 3;
+    matchState.lastRoundWinner = -1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const resultsScreen = createRoundResults((state) => transitions.push(state));
+    resultsScreen.onEnter(container);
+    resultsScreen.onUpdate(0.25);
+
+    assert.equal(container.querySelector('.results-heading')?.textContent, 'ROUND 3 RESULTS');
+    assert.equal(
+      container.querySelector('.results-draw')?.textContent,
+      'DRAW — NO WINNER THIS ROUND',
+    );
+    assert.equal(container.querySelector('.results-round-winner'), null);
+    assert.equal(container.querySelector('.results-player-row--winner'), null);
+
+    resultsScreen.onKeyDown({ key: 'Escape' });
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    resultsScreen.onExit();
+  });
+}
+
+async function testRoundResultsSingleWinTargetUsesSingularCopy() {
+  await withDom(async () => {
+    resetMatch(2, 1);
+    matchState.roundNumber = 1;
+    matchState.lastRoundWinner = 0;
+    matchState.scores[0] = 1;
+
+    const container = createContainer();
+    const resultsScreen = createRoundResults(() => {});
+    resultsScreen.onEnter(container);
+
+    assert.equal(
+      container.querySelector('.results-heading')?.textContent,
+      'ROUND 1 RESULTS',
+    );
+    assert.equal(
+      container.querySelector('.results-target')?.textContent,
+      'FIRST TO 1 WIN',
+    );
+
+    resultsScreen.onExit();
+  });
+}
+
+async function testGameplayTransitionsToMatchVictoryOnFinalRound() {
+  await withDom(async () => {
+    const transitions = [];
+    gameConfig.map = 'BASIC';
+    gameConfig.mapFile = null;
+    gameConfig.winsRequired = 1;
+    gameConfig.players = [{ type: 'human' }, { type: 'off' }];
+    matchState.roundNumber = 0;
+    matchState.matchWinner = -1;
+    matchState.lastRoundWinner = -1;
+    matchState.scores = [];
+
+    const container = createContainer();
+    const gameplayScreen = createGameplayScreen((state) => transitions.push(state));
+    gameplayScreen.onEnter(container);
+    await flush(6);
+
+    gameplayScreen.onUpdate(2.1);
+    gameplayScreen.onUpdate(0.016);
+    gameplayScreen.onUpdate(3.1);
+
+    assert.deepEqual(transitions, ['match-victory']);
+    assert.equal(matchState.matchWinner, 0);
+
+    gameplayScreen.onExit();
+  });
+}
+
+async function testMatchVictoryScreenShowsWinnerAndReturnsToMenu() {
+  await withDom(async () => {
+    resetMatch(2, 3);
+    matchState.roundNumber = 4;
+    matchState.scores[0] = 3;
+    matchState.scores[1] = 1;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const victoryScreen = createMatchVictory((state) => transitions.push(state));
+    victoryScreen.onEnter(container);
+    victoryScreen.onUpdate(0.25);
+    assert.match(
+      container.querySelector('.results-match-winner')?.getAttribute('style') ?? '',
+      /transform:\s*scale\(/i,
+    );
+
+    assert.equal(container.querySelector('.results-heading')?.textContent, 'MATCH OVER');
+    assert.equal(
+      container.querySelector('.results-match-winner')?.textContent,
+      'PLAYER 1 WINS THE MATCH!',
+    );
+    assert.equal(
+      container.querySelector('.match-victory-summary')?.textContent,
+      'DECIDED IN 4 ROUNDS',
+    );
+    assert.equal(
+      container.querySelector('.results-target')?.textContent,
+      'FIRST TO 3 WINS',
+    );
+    assert.equal(
+      container.querySelector('.results-prompt')?.textContent,
+      'ENTER/SPACE — BACK TO MENU',
+    );
+    assert.ok(container.querySelector('.results-player-row--match-winner'));
+    assert.equal(
+      container.querySelector('.results-win-count')?.textContent,
+      '3W',
+    );
+    assert.match(
+      container.querySelector('.results-player-row--match-winner .results-crown')?.textContent ?? '',
+      /♛/,
+    );
+
+    victoryScreen.onKeyDown({ key: ' ' });
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    victoryScreen.onExit();
+  });
+}
+
+async function testMatchVictoryEscapeReturnsToMenuAndResetsRoundState() {
+  await withDom(async () => {
+    resetMatch(3, 2);
+    matchState.roundNumber = 5;
+    matchState.scores[0] = 2;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const victoryScreen = createMatchVictory((state) => transitions.push(state));
+    victoryScreen.onEnter(container);
+    victoryScreen.onUpdate(0.25);
+
+    assert.equal(
+      container.querySelector('.results-match-winner')?.textContent,
+      'PLAYER 1 WINS THE MATCH!',
+    );
+
+    victoryScreen.onKeyDown({ key: 'Escape' });
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    victoryScreen.onExit();
+  });
+}
+
+async function testMatchVictoryClickReturnsToMenu() {
+  await withDom(async () => {
+    resetMatch(3, 2);
+    matchState.roundNumber = 5;
+    matchState.scores[0] = 2;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const victoryScreen = createMatchVictory((state) => transitions.push(state));
+    victoryScreen.onEnter(container);
+
+    assert.equal(
+      container.querySelector('.results-hint')?.textContent,
+      'CLICK/TAP to confirm | ESC to quit to menu',
+    );
+
+    click(container.querySelector('.results-panel'));
+    click(container.querySelector('.results-heading'));
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    victoryScreen.onExit();
+  });
+}
+
+async function testMatchVictoryIgnoresRepeatedEscapeUntilFreshPress() {
+  await withDom(async () => {
+    resetMatch(3, 2);
+    matchState.roundNumber = 5;
+    matchState.scores[0] = 2;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const victoryScreen = createMatchVictory((state) => transitions.push(state));
+    victoryScreen.onEnter(container);
+
+    victoryScreen.onKeyDown({ key: 'Escape', repeat: true });
+    victoryScreen.onKeyDown({ key: 'Escape', repeat: true });
+    assert.deepEqual(transitions, []);
+    assert.equal(matchState.roundNumber, 5);
+    assert.deepEqual(matchState.scores, [2, 1, 0]);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, 0);
+
+    victoryScreen.onKeyDown({ key: 'Escape' });
+    victoryScreen.onKeyDown({ key: 'Escape', repeat: true });
+    victoryScreen.onKeyDown({ key: 'Enter', repeat: true });
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    victoryScreen.onExit();
+  });
+}
+
+async function testMatchVictoryTransitionGuardResetsAfterReentry() {
+  await withDom(async () => {
+    resetMatch(3, 2);
+    matchState.roundNumber = 5;
+    matchState.scores[0] = 2;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const firstContainer = createContainer();
+    const firstScreen = createMatchVictory((state) => transitions.push(`first:${state}`));
+    firstScreen.onEnter(firstContainer);
+    firstScreen.onKeyDown({ key: 'Enter' });
+    assert.deepEqual(transitions, ['first:main-menu']);
+    firstScreen.onExit();
+
+    resetMatch(3, 2);
+    matchState.roundNumber = 5;
+    matchState.scores[0] = 2;
+    matchState.scores[1] = 1;
+    matchState.scores[2] = 0;
+    matchState.matchWinner = 0;
+
+    const secondContainer = createContainer();
+    const secondScreen = createMatchVictory((state) => transitions.push(`second:${state}`));
+    secondScreen.onEnter(secondContainer);
+    secondScreen.onKeyDown({ key: 'Escape' });
+    assert.deepEqual(transitions, ['first:main-menu', 'second:main-menu']);
+    secondScreen.onExit();
+  });
+}
+
+async function testMatchVictorySingleRoundSummaryUsesSingularCopy() {
+  await withDom(async () => {
+    resetMatch(2, 1);
+    matchState.roundNumber = 1;
+    matchState.scores[0] = 1;
+    matchState.scores[1] = 0;
+    matchState.matchWinner = 0;
+
+    const container = createContainer();
+    const victoryScreen = createMatchVictory(() => {});
+    victoryScreen.onEnter(container);
+
+    assert.equal(
+      container.querySelector('.match-victory-summary')?.textContent,
+      'DECIDED IN 1 ROUND',
+    );
+    assert.equal(
+      container.querySelector('.results-target')?.textContent,
+      'FIRST TO 1 WIN',
+    );
+
+    victoryScreen.onExit();
+  });
+}
+
+async function testGameplayEscapeReturnsToMenuAndClearsMatchProgress() {
+  await withDom(async () => {
+    gameConfig.map = 'BASIC';
+    gameConfig.mapFile = null;
+    gameConfig.winsRequired = 2;
+    gameConfig.players = [{ type: 'human' }, { type: 'human' }];
+
+    resetMatch(2, 2);
+    matchState.roundNumber = 2;
+    matchState.scores[0] = 1;
+    matchState.lastRoundWinner = 0;
+    matchState.matchWinner = 0;
+
+    const transitions = [];
+    const container = createContainer();
+    const gameplayScreen = createGameplayScreen((state) => transitions.push(state));
+    gameplayScreen.onEnter(container);
+    await flush(6);
+
+    gameplayScreen.onKeyDown({ key: 'Escape' });
+    assert.deepEqual(transitions, ['main-menu']);
+    assert.equal(matchState.roundNumber, 0);
+    assert.deepEqual(matchState.scores, []);
+    assert.equal(matchState.lastRoundWinner, -1);
+    assert.equal(matchState.matchWinner, -1);
+
+    gameplayScreen.onExit();
+  });
+}
+
+async function testParticleSystemEmitsUpdatesAndRenders() {
+  const particles = new ParticleSystem();
+  const ctx = createMockCanvasContext();
+
+  particles.emitExplosionSparks(3, 4);
+  particles.emitBrickDebris(5, 6);
+  assert.ok(particles.count > 0);
+
+  particles.update(0.1);
+  particles.render(ctx, 0, 0, 40, 36);
+  assert.ok(particles.count > 0);
+
+  particles.update(2);
+  assert.equal(particles.count, 0);
+}
+
+async function testSchemeParserReadsConveyorMetadata() {
+  const parsed = parseScheme([
+    '-N,CONVEYOR TEST',
+    '-B,0',
+    '-C,N,4,5',
+    'C E 6 7',
+    '-W,1,0,4',
+    'W 0 0 8',
+  ].join('\n'));
+
+  assert.deepEqual(parsed.conveyors, [
+    { x: 4, y: 5, direction: 'up' },
+    { x: 6, y: 7, direction: 'right' },
+  ]);
+  assert.deepEqual(parsed.warps, [
+    { index: 0, target: 1, x: 0, y: 4 },
+    { index: 1, target: 0, x: 0, y: 8 },
+  ]);
+}
+
+function createOpenTestGrid() {
+  return new GameGrid({
+    name: 'TEST',
+    brickDensity: 0,
+    grid: Array.from({ length: 11 }, () => Array(15).fill(0)),
+    spawns: [{ player: 0, x: 2, y: 2, team: 0 }],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  });
+}
+
+async function testConveyorTilesCarryPlayersAndBombs() {
+  const grid = new GameGrid({
+    name: 'CONVEYOR',
+    brickDensity: 0,
+    grid: Array.from({ length: 11 }, () => Array(15).fill(0)),
+    spawns: [{ player: 0, x: 2, y: 2, team: 0 }],
+    powerups: [],
+    conveyors: [
+      { x: 2, y: 2, direction: 'right' },
+      { x: 3, y: 2, direction: 'right' },
+      { x: 4, y: 2, direction: 'right' },
+    ],
+    warps: [],
+  });
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 2, 2);
+
+  player.update(0.5, grid, bombs);
+  assert.ok(player.x > 2.6, 'expected idle player to be pushed along the conveyor');
+
+  assert.equal(bombs.placeBomb(2, 2, 0, 2), true);
+  bombs.update(0.5, grid);
+  assert.ok(bombs.bombs[0].slideX > 0, 'expected idle bomb to start sliding along the conveyor');
+}
+
+async function testWarpTilesTeleportPlayersAndBombs() {
+  const grid = new GameGrid({
+    name: 'WARP',
+    brickDensity: 0,
+    grid: Array.from({ length: 11 }, () => Array(15).fill(0)),
+    spawns: [{ player: 0, x: 2, y: 2, team: 0 }],
+    powerups: [],
+    conveyors: [],
+    warps: [
+      { index: 0, target: 1, x: 2, y: 2 },
+      { index: 1, target: 0, x: 7, y: 5 },
+    ],
+  });
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 2, 2);
+
+  player.update(0.016, grid, bombs);
+  assert.equal(player.x, 7, 'expected player to teleport to the target warp');
+  assert.equal(player.y, 5, 'expected player to land on the target warp row');
+
+  player.update(0.016, grid, bombs);
+  assert.equal(player.x, 7, 'expected player to stay on the destination warp without bouncing');
+  assert.equal(player.y, 5, 'expected player to stay on the destination warp without bouncing');
+
+  assert.equal(bombs.placeBomb(2, 2, 0, 2), true);
+  bombs.update(0.016, grid);
+  assert.equal(bombs.bombs[0].col, 7, 'expected bomb to teleport to the target warp');
+  assert.equal(bombs.bombs[0].row, 5, 'expected bomb to land on the target warp row');
+
+  bombs.update(0.016, grid);
+  assert.equal(bombs.bombs[0].col, 7, 'expected bomb to remain on the destination warp until moved away');
+  assert.equal(bombs.bombs[0].row, 5, 'expected bomb to remain on the destination warp until moved away');
+}
+
+async function testDiseasePowerupsApplyTimedDebuffs() {
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 2, 2);
+
+  applyPowerup(PowerupType.SuperDisease, player);
+  assert.equal(player.hasSlowDisease(), true);
+  assert.equal(player.hasReverseDisease(), true);
+
+  player.setInput('right', true);
+  player.update(0.2, grid, bombs);
+  assert.ok(player.x < 2, 'expected reverse controls to move left');
+  assert.ok(player.x > 1.6, 'expected slow disease to reduce travel distance');
+
+  player.setInput('right', false);
+  player.update(15.1, grid, bombs);
+  assert.equal(player.hasSlowDisease(), false);
+  assert.equal(player.hasReverseDisease(), false);
+
+  const clearedX = player.x;
+  player.setInput('right', true);
+  player.update(0.2, grid, bombs);
+  assert.ok(player.x > clearedX, 'expected movement to return to normal after disease expiry');
+}
+
+async function testTriggerPowerupDetonatesOldestOwnedBomb() {
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+  const player = new Player(0, 'human', 2, 2);
+
+  applyPowerup(PowerupType.Trigger, player);
+  assert.equal(player.stats.hasTrigger, true);
+
+  assert.equal(bombs.placeBomb(2, 2, player.index, 2), true);
+  assert.equal(bombs.placeBomb(2, 5, player.index, 2), true);
+
+  const events = bombs.triggerOldestBomb(player.index, grid);
+  assert.ok(events, 'expected trigger detonation events');
+  assert.deepEqual(events.explosionPositions[0], { col: 2, row: 2 });
+  assert.equal(bombs.hasBomb(2, 2), false, 'expected oldest bomb to be removed immediately');
+  assert.equal(bombs.hasBomb(2, 5), true, 'expected newer bomb to remain active');
+}
+
+async function testJellyKickedBombsBounceOffBlockingEdges() {
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  assert.equal(bombs.placeBomb(13, 5, 0, 2, true), true);
+  assert.equal(bombs.kickBomb(13, 5, 'right', grid), true);
+
+  bombs.update(0.2, grid);
+  assert.equal(bombs.bombs[0].col, 14, 'expected kicked bomb to reach the edge tile first');
+  assert.equal(
+    bombs.bombs[0].slideDirection,
+    'left',
+    'expected jelly kicked bomb to reverse direction at the blocking edge',
+  );
+  assert.equal(bombs.bombs[0].slideX, 0, 'expected bounce to snap back to the tile center');
+
+  bombs.update(0.2, grid);
+  assert.equal(bombs.bombs[0].col, 13, 'expected bounced bomb to travel back into the arena');
+}
+
+async function testSchemeStartingInventoryAppliesLivePlayerStats() {
+  const player = new Player(0, 'human', 2, 2);
+
+  applySchemeStartingInventory(player, [
+    {
+      id: PowerupType.ExtraBomb,
+      name: 'Extra bomb',
+      bornWith: 2,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+    {
+      id: PowerupType.Speed,
+      name: 'Extra speed',
+      bornWith: 1,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+    {
+      id: PowerupType.Kick,
+      name: 'Kick',
+      bornWith: 1,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+    {
+      id: PowerupType.Trigger,
+      name: 'Trigger',
+      bornWith: 1,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+    {
+      id: PowerupType.Jelly,
+      name: 'Jelly',
+      bornWith: 1,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+    {
+      id: 99,
+      name: 'Unknown',
+      bornWith: 3,
+      hasOverride: false,
+      overrideValue: 0,
+      forbidden: false,
+    },
+  ]);
+
+  assert.equal(player.stats.maxBombs, 3);
+  assert.equal(player.stats.speed, 3.5);
+  assert.equal(player.stats.canKick, true);
+  assert.equal(player.stats.hasTrigger, true);
+  assert.equal(player.stats.hasJelly, true);
+}
+
+async function testGameplayHudShowsPowerupAndDiseaseBadgesFromSchemeInventory() {
+  await withDom(async () => {
+    await storeFile(
+      'maps/status.sch',
+      new TextEncoder().encode(
+        [
+          '-N,STATUS TEST',
+          '-B,0',
+          '-S,0,2,2,0',
+          '-S,1,12,8,0',
+          '-P,3,1,0,0,Kick',
+          '-P,9,1,0,0,Trigger',
+          '-P,10,1,0,0,Jelly',
+          '-P,11,1,0,0,Super bad disease',
+        ].join('\n'),
+      ).buffer,
+    );
+    await storeMetadata({
+      importedAt: Date.now(),
+      fileCount: 1,
+      totalSize: 24,
+    });
+    assets.invalidate();
+
+    gameConfig.map = 'STATUS';
+    gameConfig.mapFile = 'maps/status.sch';
+    gameConfig.players = [{ type: 'human' }, { type: 'human' }];
+
+    const container = createContainer();
+    const gameplayScreen = createGameplayScreen(() => {});
+    gameplayScreen.onEnter(container);
+    await flush(6);
+
+    const playerHud = container.querySelector('.gameplay-player-hud');
+    assert.ok(playerHud, 'expected gameplay player HUD to be rendered');
+
+    const firstPlayerRow = playerHud.querySelector('.hud-player');
+    assert.ok(firstPlayerRow, 'expected at least one player HUD row');
+    assert.match(firstPlayerRow.innerHTML, />K</, 'expected Kick badge');
+    assert.match(firstPlayerRow.innerHTML, />T</, 'expected Trigger badge');
+    assert.match(firstPlayerRow.innerHTML, />J</, 'expected Jelly badge');
+    assert.match(firstPlayerRow.innerHTML, />SL</, 'expected slow disease badge');
+    assert.match(firstPlayerRow.innerHTML, />RV</, 'expected reverse disease badge');
+
+    const dangerBadges = firstPlayerRow.querySelectorAll('.hud-powerup--danger');
+    assert.equal(dangerBadges.length, 2, 'expected both disease badges to use the danger style');
+
+    gameplayScreen.onExit();
+  });
+}
+
+async function testGameplayHudRowRefreshesAfterRuntimePowerupChanges() {
+  const player = new Player(0, 'human', 1, 1);
+  const emptyGrid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  const baseRow = renderPlayerHudRow(player);
+  assert.doesNotMatch(baseRow, />K</, 'did not expect Kick badge before a live powerup change');
+  assert.doesNotMatch(baseRow, />T</, 'did not expect Trigger badge before a live powerup change');
+  assert.doesNotMatch(baseRow, />SL</, 'did not expect disease badges before a live powerup change');
+
+  applyPowerup(PowerupType.Kick, player);
+  applyPowerup(PowerupType.Trigger, player);
+  applyPowerup(PowerupType.SuperDisease, player);
+
+  const upgradedRow = renderPlayerHudRow(player);
+  assert.match(upgradedRow, />K</, 'expected Kick badge after a live powerup change');
+  assert.match(upgradedRow, />T</, 'expected Trigger badge after a live powerup change');
+  assert.match(upgradedRow, />SL</, 'expected slow disease badge after a live powerup change');
+  assert.match(upgradedRow, />RV</, 'expected reverse disease badge after a live powerup change');
+
+  player.update(16, emptyGrid, bombs);
+  const clearedRow = renderPlayerHudRow(player);
+  assert.doesNotMatch(clearedRow, />SL</, 'expected slow disease badge to clear after expiry');
+  assert.doesNotMatch(clearedRow, />RV</, 'expected reverse disease badge to clear after expiry');
+  assert.match(clearedRow, />K</, 'expected permanent powerup badges to remain after disease expiry');
+  assert.match(clearedRow, />T</, 'expected trigger badge to remain after disease expiry');
+}
+
+async function testGameplayScreenShakeTriggersOnExplosion() {
+  await withDom(async () => {
+    const originalRandom = Math.random;
+    Math.random = () => 1;
+
+    try {
+      gameConfig.map = 'BASIC';
+      gameConfig.mapFile = null;
+      gameConfig.players = [{ type: 'human' }, { type: 'human' }];
+
+      const container = createContainer();
+      const gameplayScreen = createGameplayScreen(() => {});
+      gameplayScreen.onEnter(container);
+      await flush(6);
+
+      const canvas = container.querySelector('.gameplay-canvas');
+      const ctx = canvas?.getContext('2d');
+      assert.ok(canvas);
+      assert.ok(ctx);
+
+      gameplayScreen.onUpdate(2.1);
+      const baseTranslateCount = ctx.__translateCalls.length;
+      const baseHudText = container.querySelector('.gameplay-player-hud')?.textContent ?? '';
+
+      gameplayScreen.onKeyDown({ key: ' ', preventDefault() {} });
+      gameplayScreen.onUpdate(0.016);
+      gameplayScreen.onKeyUp({ key: ' ' });
+
+      for (let i = 0; i < 50; i += 1) {
+        gameplayScreen.onUpdate(0.05);
+      }
+
+      assert.ok(
+        ctx.__translateCalls.length > baseTranslateCount,
+        'expected gameplay to keep rendering after the live bomb explodes',
+      );
+      assert.notEqual(
+        container.querySelector('.gameplay-player-hud')?.textContent ?? '',
+        baseHudText,
+        'expected the HUD to update after the explosion resolves',
+      );
+
+      gameplayScreen.onExit();
+    } finally {
+      Math.random = originalRandom;
+    }
   });
 }
 
@@ -411,6 +1332,32 @@ async function main() {
   await run('gameplay bootstrap resolves the exact selected scheme file', testGameplaySchemeResolutionPrefersExactSelectedFile);
   await run('gameplay HUD surfaces the selected imported map during bootstrap', testGameplayMapHudShowsImportedSelection);
   await run('main menu marks unavailable items as locked and blocks locked selection', testLockedMenuItems);
+  await run('round results advances to the next round while preserving the scoreboard', testRoundResultsAdvancesToNextRound);
+  await run('round results enter carries match progress into the next gameplay round', testRoundResultsEnterCarriesProgressIntoNextGameplayRound);
+  await run('round results click/tap confirm advances to the next round once', testRoundResultsClickAdvancesToNextRound);
+  await run('round results ignores repeated Enter keydown events until a fresh press', testRoundResultsIgnoresRepeatedEnterUntilFreshPress);
+  await run('round results transition guard resets after re-entry', testRoundResultsTransitionGuardResetsAfterReentry);
+  await run('round results draw state exits to menu without marking a winner', testRoundResultsDrawExitsToMenu);
+  await run('round results singular target copy stays singular for one-win matches', testRoundResultsSingleWinTargetUsesSingularCopy);
+  await run('particle system emits, updates, and renders transient effects', testParticleSystemEmitsUpdatesAndRenders);
+  await run('scheme parsing reads conveyor metadata from supported text formats', testSchemeParserReadsConveyorMetadata);
+  await run('disease powerups apply timed reverse and slow debuffs', testDiseasePowerupsApplyTimedDebuffs);
+  await run('trigger powerup detonates the oldest owned bomb', testTriggerPowerupDetonatesOldestOwnedBomb);
+  await run('jelly kicked bombs bounce off blocking edges', testJellyKickedBombsBounceOffBlockingEdges);
+  await run('scheme starting inventory applies live player stats at bootstrap', testSchemeStartingInventoryAppliesLivePlayerStats);
+  await run('gameplay HUD shows powerup and disease badges from scheme starting inventory', testGameplayHudShowsPowerupAndDiseaseBadgesFromSchemeInventory);
+  await run('gameplay HUD row refreshes after live powerup and disease changes', testGameplayHudRowRefreshesAfterRuntimePowerupChanges);
+  await run('conveyor tiles carry idle players and bombs', testConveyorTilesCarryPlayersAndBombs);
+  await run('warp tiles teleport players and bombs without immediate bounce-back', testWarpTilesTeleportPlayersAndBombs);
+  await run('gameplay explosion frames continue rendering after detonation', testGameplayScreenShakeTriggersOnExplosion);
+  await run('gameplay transitions to match victory after the deciding round', testGameplayTransitionsToMatchVictoryOnFinalRound);
+  await run('match victory screen announces the winner and exits to menu', testMatchVictoryScreenShowsWinnerAndReturnsToMenu);
+  await run('match victory escape returns to menu and resets round state', testMatchVictoryEscapeReturnsToMenuAndResetsRoundState);
+  await run('match victory click/tap confirm returns to menu once', testMatchVictoryClickReturnsToMenu);
+  await run('match victory ignores repeated Escape keydown events until a fresh press', testMatchVictoryIgnoresRepeatedEscapeUntilFreshPress);
+  await run('match victory transition guard resets after re-entry', testMatchVictoryTransitionGuardResetsAfterReentry);
+  await run('match victory singular summary copy stays singular for one-round matches', testMatchVictorySingleRoundSummaryUsesSingularCopy);
+  await run('gameplay escape returns to menu and clears match progress', testGameplayEscapeReturnsToMenuAndClearsMatchProgress);
 
   if (process.exitCode) {
     process.exit(process.exitCode);
