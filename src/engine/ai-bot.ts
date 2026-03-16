@@ -89,6 +89,10 @@ const DIFFICULTY_SETTINGS: Record<AIDifficulty, {
 const THINK_QUICK_RETHINK = 0.05;
 const THINK_THROW_DELAY = 0.1;
 const NAV_ARRIVAL_THRESHOLD = 0.15;
+/** Tighter threshold used when the next waypoint requires a perpendicular turn.
+ *  The player hitbox is 0.6 wide (HALF=0.3). At 0.05 from cell center, the
+ *  hitbox edge is at 0.35 from the adjacent cell — safely clear of the wall. */
+const NAV_TURN_THRESHOLD = 0.05;
 const NAV_DIRECTION_DEADZONE = 0.05;
 
 export class AIBot {
@@ -777,7 +781,25 @@ export class AIBot {
 
     const dx = target.col - this.player.x;
     const dy = target.row - this.player.y;
-    if (Math.abs(dx) < NAV_ARRIVAL_THRESHOLD && Math.abs(dy) < NAV_ARRIVAL_THRESHOLD) {
+
+    // Use a tighter threshold when the next waypoint requires a perpendicular
+    // turn, so the AI walks closer to the cell center before turning.  This
+    // prevents the hitbox from catching on the corner wall.
+    let threshold = NAV_ARRIVAL_THRESHOLD;
+    const nextIdx = this.pathIndex + 1;
+    if (nextIdx < this.path.length) {
+      const next = this.path[nextIdx];
+      const movingHoriz = Math.abs(dx) > Math.abs(dy);
+      const nextDx = next.col - target.col;
+      const nextDy = next.row - target.row;
+      const nextHoriz = Math.abs(nextDx) > Math.abs(nextDy);
+      if (movingHoriz !== nextHoriz) {
+        // Perpendicular turn coming — tighten threshold
+        threshold = NAV_TURN_THRESHOLD;
+      }
+    }
+
+    if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) {
       this.pathIndex++;
       if (this.pathIndex >= this.path.length) return;
       const next = this.path[this.pathIndex];
