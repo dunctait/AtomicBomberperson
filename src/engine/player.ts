@@ -290,9 +290,11 @@ export class Player {
   }
 
   getGridPos(): { col: number; row: number } {
+    // Must match the collision detection formula: Math.floor(pos - HALF + 0.5)
+    // so bombs are always placed in a cell the player actually occupies.
     return {
-      col: Math.round(this.x),
-      row: Math.round(this.y),
+      col: Math.floor(this.x + 0.2),
+      row: Math.floor(this.y + 0.2),
     };
   }
 
