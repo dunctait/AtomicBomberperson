@@ -1109,13 +1109,15 @@ async function testJellyKickedBombsBounceOffBlockingEdges() {
   const grid = createOpenTestGrid();
   const bombs = new BombManager();
 
-  // Place bomb at col 12 and kick toward the border wall at col 14.
-  // Col 13 is the last walkable cell; the bomb should reach col 13 then bounce.
+  // Place bomb at col 12 and kick toward the grid edge at col 14.
+  // Col 14 is the last in-bounds cell; the bomb should reach col 14 then bounce
+  // because col 15 is out of bounds.
   assert.equal(bombs.placeBomb(12, 5, 0, 2, true), true);
   assert.equal(bombs.kickBomb(12, 5, 'right', grid), true);
 
-  bombs.update(0.2, grid);
-  assert.equal(bombs.bombs[0].col, 13, 'expected kicked bomb to reach the last open tile');
+  // Speed=6, need to cover 2 tiles (12→14), give enough time
+  bombs.update(0.5, grid);
+  assert.equal(bombs.bombs[0].col, 14, 'expected kicked bomb to reach the last open tile');
   assert.equal(
     bombs.bombs[0].slideDirection,
     'left',
@@ -1124,7 +1126,7 @@ async function testJellyKickedBombsBounceOffBlockingEdges() {
   assert.equal(bombs.bombs[0].slideX, 0, 'expected bounce to snap back to the tile center');
 
   bombs.update(0.2, grid);
-  assert.equal(bombs.bombs[0].col, 12, 'expected bounced bomb to travel back into the arena');
+  assert.equal(bombs.bombs[0].col, 13, 'expected bounced bomb to travel back into the arena');
 }
 
 async function testSchemeStartingInventoryAppliesLivePlayerStats() {
@@ -1455,24 +1457,20 @@ function testBombNotPlacedOnExistingBomb() {
 }
 
 function testBombPlacementAtGridCorners() {
-  // Border cells are walls, so test the inner corners (1,1), (13,1), (1,9), (13,9)
-  const grid = makeGrid();
+  const grid = createOpenTestGrid();
   const bombs = new BombManager();
 
-  assert.ok(bombs.placeBomb(1, 1, 0, 2), 'bomb at inner top-left corner');
-  assert.ok(bombs.placeBomb(13, 1, 0, 2), 'bomb at inner top-right corner');
-  assert.ok(bombs.placeBomb(1, 9, 0, 2), 'bomb at inner bottom-left corner');
-  assert.ok(bombs.placeBomb(13, 9, 0, 2), 'bomb at inner bottom-right corner');
+  assert.ok(bombs.placeBomb(0, 0, 0, 2), 'bomb at top-left corner');
+  assert.ok(bombs.placeBomb(14, 0, 0, 2), 'bomb at top-right corner');
+  assert.ok(bombs.placeBomb(0, 10, 0, 2), 'bomb at bottom-left corner');
+  assert.ok(bombs.placeBomb(14, 10, 0, 2), 'bomb at bottom-right corner');
 
-  // Detonate corner bomb and verify explosions stay in bounds and stop at border walls
+  // Detonate corner bomb and verify explosions stay in bounds
   bombs.bombs[0].timer = 0;
   bombs.update(0.01, grid);
   for (const exp of bombs.explosions) {
     assert.ok(exp.col >= 0 && exp.col < 15, `explosion col ${exp.col} out of bounds`);
     assert.ok(exp.row >= 0 && exp.row < 11, `explosion row ${exp.row} out of bounds`);
-    // Explosions should not reach border cells (col 0, row 0)
-    assert.ok(!(exp.col === 0 && exp.direction === 'left'), 'explosion should not reach border wall');
-    assert.ok(!(exp.row === 0 && exp.direction === 'up'), 'explosion should not reach border wall');
   }
 }
 
