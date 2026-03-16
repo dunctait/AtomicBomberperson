@@ -208,6 +208,73 @@ export class BombManager {
     return true;
   }
 
+  /**
+   * Punch a bomb — launch it over obstacles to land 3-5 tiles away.
+   * The bomb teleports instantly to the first clear cell at distance 3-5.
+   * If no clear cell is found at those distances, it lands on the last
+   * empty cell it passed over (at any distance).
+   * Returns true if the punch was applied.
+   */
+  punchBomb(
+    col: number,
+    row: number,
+    direction: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+  ): boolean {
+    const bomb = this.getLiveBombAt(col, row);
+    if (!bomb) return false;
+
+    const { ddx, ddy } = dirToDeltas(direction);
+
+    // Scan tiles 1 through 5 in the punch direction.
+    // The bomb flies over everything and tries to land on the first clear
+    // cell at distance 3, 4, or 5. If none of those are clear, fall back
+    // to the last clear cell encountered at any distance.
+    let lastClearCol: number | null = null;
+    let lastClearRow: number | null = null;
+
+    for (let dist = 1; dist <= 5; dist++) {
+      const targetCol = col + ddx * dist;
+      const targetRow = row + ddy * dist;
+
+      // Out of bounds — stop scanning
+      if (targetCol < 0 || targetCol >= GRID_COLS || targetRow < 0 || targetRow >= GRID_ROWS) {
+        break;
+      }
+
+      const cell = grid.getCell(targetCol, targetRow);
+      if (!cell) break;
+
+      const isClear = cell.type === CellContent.Empty && !this.hasBomb(targetCol, targetRow);
+
+      if (isClear) {
+        lastClearCol = targetCol;
+        lastClearRow = targetRow;
+
+        // Prefer landing at distance 3-5
+        if (dist >= 3) {
+          bomb.col = targetCol;
+          bomb.row = targetRow;
+          bomb.graceOwner = null;
+          this.stopSliding(bomb);
+          return true;
+        }
+      }
+    }
+
+    // No clear cell at distance 3-5 — use the last clear cell we found
+    if (lastClearCol !== null && lastClearRow !== null) {
+      bomb.col = lastClearCol;
+      bomb.row = lastClearRow;
+      bomb.graceOwner = null;
+      this.stopSliding(bomb);
+      return true;
+    }
+
+    // No valid landing spot at all — punch fails
+    return false;
+  }
+
   /** Check whether a grid cell is traversable by a sliding bomb. */
   private isCellClearForSlide(col: number, row: number, grid: GameGrid): boolean {
     if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) return false;
@@ -428,5 +495,82 @@ export class BombManager {
     return this.bombs.some(
       (b) => !b.exploded && b.col === col && b.row === row && b.graceOwner !== playerIndex,
     );
+  }
+
+  /**
+   * Grab (pick up) a bomb at the given position owned by the given player.
+   * The bomb is removed from the grid and returned so the player can carry it.
+   * Returns the bomb if successful, null otherwise.
+   */
+  grabBomb(col: number, row: number, playerIndex: number): Bomb | null {
+    const idx = this.bombs.findIndex(
+      (b) => !b.exploded && b.col === col && b.row === row && b.owner === playerIndex,
+    );
+    if (idx === -1) return null;
+
+    const bomb = this.bombs[idx];
+    // Remove the bomb from the active list — it is now carried by the player
+    this.bombs.splice(idx, 1);
+    this.stopSliding(bomb);
+    return bomb;
+  }
+
+  /**
+   * Throw a carried bomb in the given direction — same landing logic as punch.
+   * The bomb flies over obstacles and lands 3-5 tiles away.
+   * If no landing spot is found, the bomb is placed at the given origin position.
+   */
+  throwBomb(
+    bomb: Bomb,
+    originCol: number,
+    originRow: number,
+    direction: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+  ): void {
+    const { ddx, ddy } = dirToDeltas(direction);
+
+    let lastClearCol: number | null = null;
+    let lastClearRow: number | null = null;
+
+    for (let dist = 1; dist <= 5; dist++) {
+      const targetCol = originCol + ddx * dist;
+      const targetRow = originRow + ddy * dist;
+
+      if (targetCol < 0 || targetCol >= GRID_COLS || targetRow < 0 || targetRow >= GRID_ROWS) {
+        break;
+      }
+
+      const cell = grid.getCell(targetCol, targetRow);
+      if (!cell) break;
+
+      const isClear = cell.type === CellContent.Empty && !this.hasBomb(targetCol, targetRow);
+
+      if (isClear) {
+        lastClearCol = targetCol;
+        lastClearRow = targetRow;
+
+        if (dist >= 3) {
+          bomb.col = targetCol;
+          bomb.row = targetRow;
+          bomb.graceOwner = null;
+          this.stopSliding(bomb);
+          this.bombs.push(bomb);
+          return;
+        }
+      }
+    }
+
+    if (lastClearCol !== null && lastClearRow !== null) {
+      bomb.col = lastClearCol;
+      bomb.row = lastClearRow;
+    } else {
+      // No landing spot — drop at origin
+      bomb.col = originCol;
+      bomb.row = originRow;
+    }
+
+    bomb.graceOwner = null;
+    this.stopSliding(bomb);
+    this.bombs.push(bomb);
   }
 }

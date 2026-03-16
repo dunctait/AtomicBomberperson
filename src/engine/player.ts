@@ -1,5 +1,5 @@
 import { GameGrid, GRID_COLS, GRID_ROWS } from './game-grid';
-import { BombManager, dirToDeltas } from './bomb';
+import { BombManager, dirToDeltas, type Bomb } from './bomb';
 
 export type PlayerType = 'human' | 'ai' | 'off';
 export type Direction = 'up' | 'down' | 'left' | 'right' | 'none';
@@ -56,6 +56,9 @@ export class Player {
   moveDirection: Direction;
 
   stats: PlayerStats;
+
+  /** Bomb currently being carried (grab/spooge mechanic). */
+  carriedBomb: Bomb | null = null;
 
   // Raw input flags
   inputUp = false;
@@ -177,8 +180,10 @@ export class Player {
       this.x = newX;
       this.y = newY;
     } else {
-      // Check for bomb kick before trying corner slide
-      if (this.stats.canKick && dir !== 'none' && this.tryKickBomb(dir, grid, bombs)) {
+      // Check for bomb punch, then kick, before trying corner slide
+      if (this.stats.canPunch && dir !== 'none' && this.tryPunchBomb(dir, grid, bombs)) {
+        // Bomb was punched — player stays in place this frame
+      } else if (this.stats.canKick && dir !== 'none' && this.tryKickBomb(dir, grid, bombs)) {
         // Bomb was kicked — player stays in place this frame
       } else {
         // Cannot move directly -- try corner sliding
@@ -377,10 +382,42 @@ export class Player {
     return bombs.kickBomb(frontCol, frontRow, dir, grid);
   }
 
+  /**
+   * Try to punch a bomb in the given direction.
+   * The bomb flies over obstacles and lands 3-5 tiles away.
+   * Returns true if a punch was initiated.
+   */
+  private tryPunchBomb(
+    dir: 'up' | 'down' | 'left' | 'right',
+    grid: GameGrid,
+    bombs: BombManager,
+  ): boolean {
+    const { ddx, ddy } = dirToDeltas(dir);
+
+    const frontCol = Math.round(this.x) + ddx;
+    const frontRow = Math.round(this.y) + ddy;
+
+    if (!bombs.isBombBlocking(frontCol, frontRow, this.index)) return false;
+
+    return bombs.punchBomb(frontCol, frontRow, dir, grid);
+  }
+
+  /** Returns true if this player is currently carrying a bomb. */
+  isCarryingBomb(): boolean {
+    return this.carriedBomb !== null;
+  }
+
   die(): void {
     this.alive = false;
     this.moving = false;
     this.moveDirection = 'none';
     this.activeWarpIndex = null;
+    // Drop carried bomb at current position (it will explode via normal fuse)
+    if (this.carriedBomb) {
+      const { col, row } = this.getGridPos();
+      this.carriedBomb.col = col;
+      this.carriedBomb.row = row;
+      this.carriedBomb = null;
+    }
   }
 }

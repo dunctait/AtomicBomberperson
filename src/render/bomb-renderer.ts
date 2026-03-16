@@ -103,7 +103,7 @@ export class BombRenderer {
       const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
       if (this.bombFrames) {
-        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
+        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer);
       } else {
         this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
       }
@@ -125,7 +125,6 @@ export class BombRenderer {
     tileH: number,
     time: number,
     bombTimer: number,
-    owner: number,
   ): void {
     const frames = this.bombFrames!;
 
@@ -144,13 +143,6 @@ export class BombRenderer {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(frame, drawX, drawY, drawW, drawH);
-    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.globalAlpha = 0.38;
-    ctx.fillStyle = ownerColor;
-    ctx.fillRect(drawX, drawY, drawW, drawH);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
     ctx.restore();
   }
 

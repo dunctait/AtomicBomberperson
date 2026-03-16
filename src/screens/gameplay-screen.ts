@@ -101,6 +101,7 @@ const GAMEPLAY_HUD_POWERUPS: GameplayHudPowerupDefinition[] = [
   { enabled: (player) => player.stats.canGrab, label: 'G', title: 'Grab' },
   { enabled: (player) => player.stats.hasTrigger, label: 'T', title: 'Trigger' },
   { enabled: (player) => player.stats.hasJelly, label: 'J', title: 'Jelly' },
+  { enabled: (player) => player.isCarryingBomb(), label: 'CB', title: 'Carrying bomb', className: 'hud-powerup--danger' },
   { enabled: (player) => player.hasSlowDisease(), label: 'SL', title: 'Slow disease', className: 'hud-powerup--danger' },
   { enabled: (player) => player.hasReverseDisease(), label: 'RV', title: 'Reverse controls disease', className: 'hud-powerup--danger' },
 ];
@@ -702,6 +703,31 @@ export function createGameplayScreen(
 
       recountActiveBombsForPlayer(p);
 
+      // --- Grab / throw logic ---
+      // If player is carrying a bomb, pressing bomb throws it
+      if (p.isCarryingBomb()) {
+        const { col, row } = p.getGridPos();
+        const facing = p.facing !== 'none' ? p.facing : 'down';
+        bombManager.throwBomb(p.carriedBomb!, col, row, facing as 'up' | 'down' | 'left' | 'right', gameGrid);
+        p.carriedBomb = null;
+        soundManager.play('BOMBDROP.WAV');
+        p.inputBomb = false;
+        continue;
+      }
+
+      // If player has grab and is standing on their own bomb, pick it up
+      if (p.stats.canGrab) {
+        const { col, row } = p.getGridPos();
+        if (bombManager.hasBomb(col, row)) {
+          const grabbed = bombManager.grabBomb(col, row, p.index);
+          if (grabbed) {
+            p.carriedBomb = grabbed;
+            p.inputBomb = false;
+            continue;
+          }
+        }
+      }
+
       if (p.stats.hasTrigger && p.stats.activeBombs > 0) {
         mergeBombEvents(triggeredEvents, bombManager.triggerOldestBomb(p.index, gameGrid));
       } else if (p.stats.activeBombs < p.stats.maxBombs) {
@@ -956,6 +982,22 @@ export function createGameplayScreen(
 
       // Handle bomb placement / remote trigger input
       const triggeredEvents = handleBombPlacement();
+
+      // Tick fuse on carried bombs — if it expires, explode at player's position
+      for (const p of players) {
+        if (p.alive && p.carriedBomb) {
+          p.carriedBomb.timer -= dt;
+          if (p.carriedBomb.timer <= 0) {
+            // Drop the bomb at the player's position and let it detonate normally
+            const { col, row } = p.getGridPos();
+            p.carriedBomb.col = col;
+            p.carriedBomb.row = row;
+            p.carriedBomb.timer = 0;
+            bombManager.bombs.push(p.carriedBomb);
+            p.carriedBomb = null;
+          }
+        }
+      }
 
       // Update all players (smooth movement)
       for (const p of players) {
