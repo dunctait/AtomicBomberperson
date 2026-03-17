@@ -47,8 +47,6 @@ function parseHexColor(hex: string): [number, number, number] {
  * Recolor a sprite frame using fpc_atomic's LoadColorTabledImage algorithm.
  * Only pixels where green is the dominant channel get recolored to the player's
  * color. Shadows, outlines, and highlights are left untouched.
- *
- * playerR/G/B are in 0-255 range; the algorithm normalises internally.
  */
 function tintFrame(
   source: HTMLCanvasElement,
@@ -100,7 +98,6 @@ function tintFrame(
       data[i + 1] = Math.min(255, ng);
       data[i + 2] = Math.min(255, nb);
     }
-    // Non-green-dominant pixels are left completely untouched
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -108,37 +105,30 @@ function tintFrame(
 }
 
 export class BombRenderer {
-  /** Original untinted bomb frames */
-  private bombFrames: HTMLCanvasElement[] | null = null;
   /** Per-player tinted bomb frames: tintedBombFrames[playerIndex][frameIndex] */
   private tintedBombFrames: HTMLCanvasElement[][] | null = null;
   private flameFrames: HTMLCanvasElement[] | null = null;
   /** Per-player tinted flame frames: tintedFlameFrames[playerIndex][frameIndex] */
   private tintedFlameFrames: HTMLCanvasElement[][] | null = null;
-  private loadStarted = false;
+  readonly loaded: Promise<void>;
 
   constructor() {
-    this.loadSprites();
+    this.loaded = this.loadSprites().catch(() => {});
   }
 
-  private loadSprites(): void {
-    if (this.loadStarted) return;
-    this.loadStarted = true;
+  private async loadSprites(): Promise<void> {
+    const [bombAnim, flameAnim] = await Promise.all([
+      loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1),
+      loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35),
+    ]);
 
-    // Try BOMB.ANI first; fall back to BOMBS.ANI if it is not available.
-    void loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1).then((anim) => {
-      if (anim) {
-        this.bombFrames = anim.frames;
-        this.generateTintedFrames(anim.frames);
-      }
-    });
-
-    void loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35).then((anim) => {
-      if (anim) {
-        this.flameFrames = anim.frames;
-        this.generateTintedFlameFrames(anim.frames);
-      }
-    });
+    if (bombAnim) {
+      this.generateTintedFrames(bombAnim.frames);
+    }
+    if (flameAnim) {
+      this.flameFrames = flameAnim.frames;
+      this.generateTintedFlameFrames(flameAnim.frames);
+    }
   }
 
   /** Pre-generate per-player color-tinted bomb frame sets */
@@ -161,20 +151,13 @@ export class BombRenderer {
     }
   }
 
-  private getFuseProgress(bombTimer: number): number {
-    return 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
-  }
-
   private getBombAnimationSpeed(bombTimer: number): number {
-    const fuseProgress = this.getFuseProgress(bombTimer);
-    // Very subtle fuse ramp: mostly steady, slightly faster near detonation.
+    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
     return BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
   }
 
   private getExplosionBaseFrame(exp: Explosion): number {
-    if (exp.direction === 'center') {
-      return FLAME_CENTER;
-    }
+    if (exp.direction === 'center') return FLAME_CENTER;
 
     if (!exp.isEnd) {
       return exp.direction === 'left' || exp.direction === 'right'
@@ -183,14 +166,10 @@ export class BombRenderer {
     }
 
     switch (exp.direction) {
-      case 'right':
-        return FLAME_RIGHT_END;
-      case 'up':
-        return FLAME_UP_END;
-      case 'down':
-        return FLAME_DOWN_END;
-      case 'left':
-        return FLAME_LEFT_END;
+      case 'right': return FLAME_RIGHT_END;
+      case 'up':    return FLAME_UP_END;
+      case 'down':  return FLAME_DOWN_END;
+      case 'left':  return FLAME_LEFT_END;
     }
   }
 
@@ -202,102 +181,34 @@ export class BombRenderer {
     tileH: number,
     time: number,
   ): void {
+    if (!this.tintedBombFrames) return;
+
     for (const bomb of bombs) {
       if (bomb.exploded) continue;
 
       const cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
       const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
 
-      if (this.tintedBombFrames) {
-        this.renderImportedBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
-      } else {
-        this.renderFallbackBomb(ctx, cx, cy, tileW, tileH, time, bomb.timer, bomb.owner);
-      }
+      // Pick the pre-tinted frame set for this player
+      const playerFrames = this.tintedBombFrames[
+        Math.min(bomb.owner, this.tintedBombFrames.length - 1)
+      ];
+
+      const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bomb.timer);
+      const fps = this.getBombAnimationSpeed(bomb.timer);
+      const frameIndex = Math.floor(fuseElapsed * fps) % playerFrames.length;
+      const frame = playerFrames[frameIndex];
+      const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
+      const drawW = frame.width * scale;
+      const drawH = frame.height * scale;
+      const drawX = cx - drawW / 2;
+      const drawY = cy - drawH / 2;
+
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(frame, drawX, drawY, drawW, drawH);
+      ctx.restore();
     }
-  }
-
-  private renderImportedBomb(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    tileW: number,
-    tileH: number,
-    time: number,
-    bombTimer: number,
-    owner: number,
-  ): void {
-    // Pick the pre-tinted frame set for this player
-    const playerFrames = this.tintedBombFrames![
-      Math.min(owner, this.tintedBombFrames!.length - 1)
-    ];
-
-    const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bombTimer);
-    const fps = this.getBombAnimationSpeed(bombTimer);
-    const frameIndex = Math.floor(fuseElapsed * fps) % playerFrames.length;
-    const frame = playerFrames[frameIndex];
-    // Scale bomb sprite to fit within one tile while preserving aspect ratio.
-    const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
-    const drawW = frame.width * scale;
-    const drawH = frame.height * scale;
-    // Use geometric centering for bomb placement so bomb and explosion origins align.
-    const drawX = cx - drawW / 2;
-    const drawY = cy - drawH / 2;
-
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(frame, drawX, drawY, drawW, drawH);
-    ctx.restore();
-  }
-
-  /**
-   * Fallback bomb rendering using canvas primitives.
-   * Pulse speed increases as the fuse burns down to mirror the imported-sprite behavior.
-   */
-  private renderFallbackBomb(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    tileW: number,
-    tileH: number,
-    time: number,
-    bombTimer: number,
-    owner: number,
-  ): void {
-    const pulseSpeed = this.getBombAnimationSpeed(bombTimer);
-    const pulsePhase = Math.sin(time * pulseSpeed);
-    const scale = 0.7 + 0.3 * (0.5 + 0.5 * pulsePhase);
-    const radius = Math.min(tileW, tileH) * 0.35 * scale;
-
-    // Shadow
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 2, radius * 0.9, radius * 0.5, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.fill();
-
-    // Bomb body
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    const ownerColor = PLAYER_COLORS[owner] ?? '#53d8fb';
-    ctx.fillStyle = ownerColor;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Highlight
-    ctx.beginPath();
-    ctx.arc(cx - radius * 0.25, cy - radius * 0.3, radius * 0.2, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.fill();
-
-    // Fuse spark
-    const sparkX = cx + radius * 0.3;
-    const sparkY = cy - radius * 0.8;
-    const sparkSize = 2 + Math.random() * 2;
-    ctx.beginPath();
-    ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
-    ctx.fillStyle = pulsePhase > 0 ? '#FFD700' : '#FF4500';
-    ctx.fill();
   }
 
   /** Draw all explosions */
@@ -307,94 +218,28 @@ export class BombRenderer {
     tileW: number,
     tileH: number,
   ): void {
+    if (!this.flameFrames) return;
+
     for (const exp of explosions) {
       const x = exp.col * tileW;
       const y = exp.row * tileH;
 
-      if (this.flameFrames) {
-        this.renderImportedFlame(ctx, x, y, tileW, tileH, exp);
-      } else {
-        this.renderFallbackFlame(ctx, x, y, tileW, tileH, exp);
-      }
-    }
-  }
+      const playerIndex = Math.min(exp.owner, (this.tintedFlameFrames?.length ?? 1) - 1);
+      const frames = this.tintedFlameFrames?.[playerIndex] ?? this.flameFrames;
+      const baseIndex = this.getExplosionBaseFrame(exp);
 
-  private renderImportedFlame(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    tileW: number,
-    tileH: number,
-    exp: Explosion,
-  ): void {
-    // Use per-player tinted frames if available, otherwise fall back to untinted
-    const playerIndex = Math.min(exp.owner, (this.tintedFlameFrames?.length ?? 1) - 1);
-    const frames = this.tintedFlameFrames?.[playerIndex] ?? this.flameFrames!;
-    const baseIndex = this.getExplosionBaseFrame(exp);
-
-    const progress = 1 - (exp.timer / EXPLOSION_DURATION);
-    const animFrame = Math.min(
-      FLAME_FRAMES_PER_TYPE - 1,
-      Math.floor(progress * FLAME_FRAMES_PER_TYPE),
-    );
-    const frameIndex = Math.min(frames.length - 1, baseIndex + animFrame);
-
-    const frame = frames[frameIndex];
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(frame, x, y, tileW, tileH);
-    ctx.restore();
-  }
-
-  private renderFallbackFlame(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    tileW: number,
-    tileH: number,
-    exp: Explosion,
-  ): void {
-    const intensity = exp.timer / EXPLOSION_DURATION;
-    const color = PLAYER_COLORS[exp.owner] ?? '#FF8000';
-    const [pr, pg, pb] = parseHexColor(color);
-
-    if (exp.direction === 'center') {
-      const gradient = ctx.createRadialGradient(
-        x + tileW / 2,
-        y + tileH / 2,
-        0,
-        x + tileW / 2,
-        y + tileH / 2,
-        tileW * 0.5,
+      const progress = 1 - (exp.timer / EXPLOSION_DURATION);
+      const animFrame = Math.min(
+        FLAME_FRAMES_PER_TYPE - 1,
+        Math.floor(progress * FLAME_FRAMES_PER_TYPE),
       );
-      gradient.addColorStop(0, `rgba(255, 255, 200, ${intensity})`);
-      gradient.addColorStop(0.5, `rgba(${pr}, ${pg}, ${pb}, ${intensity})`);
-      gradient.addColorStop(1, `rgba(${pr * 0.6 | 0}, ${pg * 0.3 | 0}, ${pb * 0.3 | 0}, ${intensity * 0.8})`);
-      ctx.fillStyle = gradient;
-    } else {
-      const gradient = ctx.createRadialGradient(
-        x + tileW / 2,
-        y + tileH / 2,
-        0,
-        x + tileW / 2,
-        y + tileH / 2,
-        tileW * 0.5,
-      );
-      gradient.addColorStop(0, `rgba(255, 255, 200, ${intensity})`);
-      gradient.addColorStop(0.6, `rgba(${pr}, ${pg}, ${pb}, ${intensity * 0.9})`);
-      gradient.addColorStop(1, `rgba(${pr * 0.5 | 0}, ${pg * 0.2 | 0}, ${pb * 0.2 | 0}, ${intensity * 0.7})`);
-      ctx.fillStyle = gradient;
-    }
+      const frameIndex = Math.min(frames.length - 1, baseIndex + animFrame);
 
-    const margin = 2;
-    ctx.fillRect(x + margin, y + margin, tileW - margin * 2, tileH - margin * 2);
-
-    ctx.fillStyle = `rgba(${pr}, ${pg}, ${pb}, ${intensity * 0.6})`;
-    if (exp.direction === 'left' || exp.direction === 'right' || exp.direction === 'center') {
-      ctx.fillRect(x + margin, y + tileH * 0.3, tileW - margin * 2, tileH * 0.4);
-    }
-    if (exp.direction === 'up' || exp.direction === 'down' || exp.direction === 'center') {
-      ctx.fillRect(x + tileW * 0.3, y + margin, tileW * 0.4, tileH - margin * 2);
+      const frame = frames[frameIndex];
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(frame, x, y, tileW, tileH);
+      ctx.restore();
     }
   }
 }

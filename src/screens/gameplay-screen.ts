@@ -955,15 +955,22 @@ export function createGameplayScreen(
       countdownActive = true;
       countdownTimer = 0;
 
-      // Load scheme asynchronously
+      // Load scheme and all renderer assets before revealing the game
       loadScheme(gameConfig.map, gameConfig.mapFile)
         .catch(() => {
           console.warn('No .SCH file found, using fallback scheme');
           currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile, 'FALLBACK', true);
           return createFallbackScheme();
         })
-        .then((loadedScheme) => {
+        .then(async (loadedScheme) => {
           const schemeSummary = initializeGameplaySystems(loadedScheme);
+          // Wait for all renderer assets to finish loading
+          await Promise.all([
+            gridRenderer?.loaded,
+            playerRenderer?.loaded,
+            bombRenderer?.loaded,
+            powerupRenderer?.loaded,
+          ]);
           revealGameplayUi(loadingMsg, schemeSummary);
         });
     },

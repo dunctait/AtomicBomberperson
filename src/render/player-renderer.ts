@@ -55,11 +55,23 @@ const WALK_CYCLE_FPS = 14;
 const PLAYER_SPRITE_HEIGHT_TILES = 2;
 
 export class PlayerRenderer {
-  private assetLoadStarted = false;
   private importedSprites: ImportedPlayerSprites | null = null;
+  readonly loaded: Promise<void>;
 
   constructor() {
-    this.ensureImportedSprites();
+    this.loaded = this.loadSprites().catch(() => {});
+  }
+
+  private async loadSprites(): Promise<void> {
+    const [stand, walk, shadow] = await Promise.all([
+      assets.getAnimation('STAND.ANI'),
+      assets.getAnimation('WALK.ANI'),
+      assets.getAnimation('SHADOW.ANI').catch(() => null),
+    ]);
+
+    if (stand.frames.length > 0 && walk.frames.length > 0) {
+      this.importedSprites = { stand, walk, shadow };
+    }
   }
 
   /** Draw a player on the grid using fractional grid coordinates. */
@@ -72,13 +84,10 @@ export class PlayerRenderer {
   ): void {
     // Fully dead (animation finished) — don't render at all
     if (!player.alive && player.deathTimer <= 0) return;
-
-    this.ensureImportedSprites();
+    if (!this.importedSprites) return;
 
     const cx = player.x * tileW + tileW / 2;
     const cy = player.y * tileH + tileH / 2;
-    const radius = Math.min(tileW, tileH) * 0.35;
-    const color = PLAYER_COLORS[player.index] || '#FFF';
 
     // Death animation progress: 1.0 = just died, 0.0 = animation complete
     const deathProgress = player.isDeathAnimating()
@@ -105,92 +114,9 @@ export class PlayerRenderer {
       ctx.translate(-cx, -cy);
     }
 
-    // Only attempt imported sprites if they loaded with valid, non-empty frames
-    try {
-      if (this.importedSprites &&
-          this.importedSprites.stand.frames.length >= 4 &&
-          this.hasVisiblePixels(this.importedSprites.stand.frames[0]) &&
-          this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime)) {
-        if (player.isDeathAnimating()) ctx.restore();
-        return;
-      }
-    } catch {
-      // Fall through to circle rendering on any error
-    }
+    this.renderImportedPlayer(ctx, player, cx, cy, tileH, elapsedTime);
 
-    if (!player.alive && !player.isDeathAnimating()) {
-      // Dead player: gray circle with X eyes (static dead state — shouldn't reach here
-      // because we return early above, but kept as safety net)
-      this.renderDeadPlayer(ctx, cx, cy, radius, player.index);
-      if (player.isDeathAnimating()) ctx.restore();
-      return;
-    }
-
-    // Body circle
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = player.isDeathAnimating() ? '#666' : color;
-    ctx.fill();
-
-    // Dark outline
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    if (!player.isDeathAnimating()) {
-      // Highlight (small white circle in upper-left for 3D effect)
-      ctx.beginPath();
-      ctx.arc(cx - radius * 0.25, cy - radius * 0.25, radius * 0.25, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.fill();
-    }
-
-    // Player number label
-    ctx.fillStyle = player.isDeathAnimating() ? '#999' : '#000';
-    ctx.font = `bold ${Math.floor(radius * 0.8)}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(player.index + 1), cx, cy + 1);
-
-    if (player.isDeathAnimating()) {
-      // Draw X eyes on the dying player
-      const eyeSize = radius * 0.2;
-      const eyeOffsetX = radius * 0.3;
-      const eyeOffsetY = radius * 0.15;
-      ctx.strokeStyle = '#C00';
-      ctx.lineWidth = 2;
-      for (const offset of [-eyeOffsetX, eyeOffsetX]) {
-        ctx.beginPath();
-        ctx.moveTo(cx + offset - eyeSize, cy - eyeOffsetY - eyeSize);
-        ctx.lineTo(cx + offset + eyeSize, cy - eyeOffsetY + eyeSize);
-        ctx.moveTo(cx + offset + eyeSize, cy - eyeOffsetY - eyeSize);
-        ctx.lineTo(cx + offset - eyeSize, cy - eyeOffsetY + eyeSize);
-        ctx.stroke();
-      }
-      ctx.restore();
-    } else {
-      // Facing direction indicator (small triangle) — only for alive players
-      this.renderFacingIndicator(ctx, cx, cy, radius, player.facing);
-    }
-  }
-
-  private ensureImportedSprites(): void {
-    if (this.assetLoadStarted) return;
-    this.assetLoadStarted = true;
-
-    void Promise.all([
-      assets.getAnimation('STAND.ANI'),
-      assets.getAnimation('WALK.ANI'),
-      assets.getAnimation('SHADOW.ANI').catch(() => null),
-    ]).then(([stand, walk, shadow]) => {
-      if (stand.frames.length === 0 || walk.frames.length === 0) {
-        return;
-      }
-
-      this.importedSprites = { stand, walk, shadow };
-    }).catch(() => {
-      // Missing player assets are expected before the user imports original files.
-    });
+    if (player.isDeathAnimating()) ctx.restore();
   }
 
   private renderImportedPlayer(
@@ -200,18 +126,14 @@ export class PlayerRenderer {
     cy: number,
     tileH: number,
     elapsedTime: number,
-  ): boolean {
-    if (!this.importedSprites) {
-      return false;
-    }
+  ): void {
+    if (!this.importedSprites) return;
 
     const frameData = player.moving
       ? this.selectWalkFrame(this.importedSprites.walk, player.facing, elapsedTime)
       : this.selectStandFrame(this.importedSprites.stand, player.facing);
 
-    if (!frameData) {
-      return false;
-    }
+    if (!frameData) return;
 
     // Compute a uniform scale from the player sprite height
     const playerSpriteH = Math.max(1, frameData.frame.height);
@@ -246,8 +168,6 @@ export class PlayerRenderer {
     if (!player.alive) {
       this.renderDeadEyes(ctx, cx, cy - tileH * 0.35, tileH * 0.12);
     }
-
-    return true;
   }
 
   private drawScaledFrame(
@@ -276,9 +196,7 @@ export class PlayerRenderer {
     animation: LoadedPlayerAnimation,
     facing: Direction,
   ): { frame: HTMLCanvasElement; hotspot: { x: number; y: number } } | null {
-    if (animation.frames.length === 0) {
-      return null;
-    }
+    if (animation.frames.length === 0) return null;
 
     const direction = facing === 'none' ? 'down' : facing;
     const frameIndex = Math.min(
@@ -297,9 +215,7 @@ export class PlayerRenderer {
     facing: Direction,
     elapsedTime: number,
   ): { frame: HTMLCanvasElement; hotspot: { x: number; y: number } } | null {
-    if (animation.frames.length === 0) {
-      return null;
-    }
+    if (animation.frames.length === 0) return null;
 
     const direction = facing === 'none' ? 'down' : facing;
     const groupIndex = DIRECTION_INDEX[direction];
@@ -313,122 +229,6 @@ export class PlayerRenderer {
       frame: animation.frames[frameIndex],
       hotspot: animation.hotspots[frameIndex] ?? animation.hotspots[0] ?? { x: 0, y: 0 },
     };
-  }
-
-  /** Draw a small triangle on the edge of the player circle showing facing direction. */
-  private renderFacingIndicator(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    radius: number,
-    facing: Direction,
-  ): void {
-    if (facing === 'none') return;
-
-    const triSize = radius * 0.3;
-    const dist = radius + triSize * 0.5;
-    let angle = 0;
-
-    switch (facing) {
-      case 'up':    angle = -Math.PI / 2; break;
-      case 'down':  angle =  Math.PI / 2; break;
-      case 'left':  angle =  Math.PI;     break;
-      case 'right': angle =  0;           break;
-    }
-
-    const tipX = cx + Math.cos(angle) * dist;
-    const tipY = cy + Math.sin(angle) * dist;
-    const baseAngle1 = angle + Math.PI * 0.75;
-    const baseAngle2 = angle - Math.PI * 0.75;
-    const b1x = tipX + Math.cos(baseAngle1) * triSize;
-    const b1y = tipY + Math.sin(baseAngle1) * triSize;
-    const b2x = tipX + Math.cos(baseAngle2) * triSize;
-    const b2y = tipY + Math.sin(baseAngle2) * triSize;
-
-    ctx.beginPath();
-    ctx.moveTo(tipX, tipY);
-    ctx.lineTo(b1x, b1y);
-    ctx.lineTo(b2x, b2y);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fill();
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  /** Draw a dead player: grayed out with X eyes. */
-  private renderDeadPlayer(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    radius: number,
-    index: number,
-  ): void {
-    // Gray body
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = '#666';
-    ctx.fill();
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // X eyes
-    const eyeSize = radius * 0.2;
-    const eyeOffsetX = radius * 0.3;
-    const eyeOffsetY = radius * 0.15;
-
-    ctx.strokeStyle = '#C00';
-    ctx.lineWidth = 2;
-
-    // Left eye X
-    ctx.beginPath();
-    ctx.moveTo(cx - eyeOffsetX - eyeSize, cy - eyeOffsetY - eyeSize);
-    ctx.lineTo(cx - eyeOffsetX + eyeSize, cy - eyeOffsetY + eyeSize);
-    ctx.moveTo(cx - eyeOffsetX + eyeSize, cy - eyeOffsetY - eyeSize);
-    ctx.lineTo(cx - eyeOffsetX - eyeSize, cy - eyeOffsetY + eyeSize);
-    ctx.stroke();
-
-    // Right eye X
-    ctx.beginPath();
-    ctx.moveTo(cx + eyeOffsetX - eyeSize, cy - eyeOffsetY - eyeSize);
-    ctx.lineTo(cx + eyeOffsetX + eyeSize, cy - eyeOffsetY + eyeSize);
-    ctx.moveTo(cx + eyeOffsetX + eyeSize, cy - eyeOffsetY - eyeSize);
-    ctx.lineTo(cx + eyeOffsetX - eyeSize, cy - eyeOffsetY + eyeSize);
-    ctx.stroke();
-
-    // Player number (dimmed)
-    ctx.fillStyle = '#999';
-    ctx.font = `bold ${Math.floor(radius * 0.8)}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(index + 1), cx, cy + radius * 0.35);
-  }
-
-  /** Check if an HTMLCanvasElement has any non-transparent pixels. Cached per canvas. */
-  private visibleCache = new WeakMap<HTMLCanvasElement, boolean>();
-  private hasVisiblePixels(canvas: HTMLCanvasElement): boolean {
-    if (this.visibleCache.has(canvas)) return this.visibleCache.get(canvas)!;
-    try {
-      if (canvas.width === 0 || canvas.height === 0) {
-        this.visibleCache.set(canvas, false);
-        return false;
-      }
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { this.visibleCache.set(canvas, false); return false; }
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      for (let i = 3; i < data.length; i += 4) {
-        if (data[i] > 0) {
-          this.visibleCache.set(canvas, true);
-          return true;
-        }
-      }
-    } catch {
-      // Cross-origin or other error
-    }
-    this.visibleCache.set(canvas, false);
-    return false;
   }
 
   private renderDeadEyes(

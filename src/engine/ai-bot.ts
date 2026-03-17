@@ -89,11 +89,13 @@ const DIFFICULTY_SETTINGS: Record<AIDifficulty, {
 const THINK_QUICK_RETHINK = 0.05;
 const THINK_THROW_DELAY = 0.1;
 const NAV_ARRIVAL_THRESHOLD = 0.15;
-/** Tighter threshold used when the next waypoint requires a perpendicular turn.
- *  The player hitbox is 0.6 wide (HALF=0.3). At 0.05 from cell center, the
- *  hitbox edge is at 0.35 from the adjacent cell — safely clear of the wall. */
-const NAV_TURN_THRESHOLD = 0.05;
 const NAV_DIRECTION_DEADZONE = 0.05;
+/**
+ * When turning a corner, the AI must be aligned on the perpendicular axis
+ * within this tolerance for the hitbox (0.6 wide) to clear the corner wall.
+ * Value must be > one movement step to avoid oscillation.
+ */
+const NAV_PERPENDICULAR_ALIGN = 0.1;
 
 export class AIBot {
   player: Player;
@@ -782,24 +784,28 @@ export class AIBot {
     const dx = target.col - this.player.x;
     const dy = target.row - this.player.y;
 
-    // Use a tighter threshold when the next waypoint requires a perpendicular
-    // turn, so the AI walks closer to the cell center before turning.  This
-    // prevents the hitbox from catching on the corner wall.
-    let threshold = NAV_ARRIVAL_THRESHOLD;
-    const nextIdx = this.pathIndex + 1;
-    if (nextIdx < this.path.length) {
-      const next = this.path[nextIdx];
-      const movingHoriz = Math.abs(dx) > Math.abs(dy);
+    // Check if we've arrived at the current waypoint.
+    // When a perpendicular turn is coming, also require the AI to be aligned
+    // on the axis perpendicular to the NEXT direction, so the hitbox clears
+    // the corner wall.  Without this, the AI switches direction too early and
+    // the 0.6-wide hitbox catches on the wall, wasting frames on corner slide.
+    let arrived = Math.abs(dx) < NAV_ARRIVAL_THRESHOLD && Math.abs(dy) < NAV_ARRIVAL_THRESHOLD;
+
+    if (arrived && this.pathIndex + 1 < this.path.length) {
+      const next = this.path[this.pathIndex + 1];
       const nextDx = next.col - target.col;
       const nextDy = next.row - target.row;
-      const nextHoriz = Math.abs(nextDx) > Math.abs(nextDy);
-      if (movingHoriz !== nextHoriz) {
-        // Perpendicular turn coming — tighten threshold
-        threshold = NAV_TURN_THRESHOLD;
+      const nextIsHoriz = nextDx !== 0;
+      // For a horizontal next move, the AI must be aligned vertically (dy small)
+      // For a vertical next move, the AI must be aligned horizontally (dx small)
+      const perpOffset = nextIsHoriz ? Math.abs(dy) : Math.abs(dx);
+      if (perpOffset > NAV_PERPENDICULAR_ALIGN) {
+        // Not aligned enough — keep moving toward current waypoint
+        arrived = false;
       }
     }
 
-    if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) {
+    if (arrived) {
       this.pathIndex++;
       if (this.pathIndex >= this.path.length) return;
       const next = this.path[this.pathIndex];
