@@ -13,6 +13,8 @@ export interface KeyBindings {
 export const DEFAULT_BINDINGS: KeyBindings[] = [
   { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', bomb: ' ' },
   { up: 'w', down: 's', left: 'a', right: 'd', bomb: 'e', bombAlt: 'Shift' },
+  { up: 'i', down: 'k', left: 'j', right: 'l', bomb: 'u' },
+  { up: '8', down: '5', left: '4', right: '6', bomb: '0' },
 ];
 
 export class InputManager {

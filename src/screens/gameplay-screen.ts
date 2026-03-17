@@ -972,10 +972,12 @@ export function createGameplayScreen(
             powerupRenderer?.loaded,
           ]);
           revealGameplayUi(loadingMsg, schemeSummary);
+          soundManager.playMusic('BOMBHP.WAV');
         });
     },
 
     onExit() {
+      soundManager.stopMusic();
       particleSystem?.clear();
       initialized = false;
       hudStatsEl = null;
