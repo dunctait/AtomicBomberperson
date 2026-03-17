@@ -6,6 +6,7 @@ export const AI_DIFFICULTY_OPTIONS: AIDifficulty[] = ['easy', 'normal', 'hard'];
 
 export interface PlayerSlot {
   type: PlayerType;
+  name: string;
 }
 
 export interface GameConfig {
@@ -45,13 +46,26 @@ export function resetConfig(): void {
   rebuildSlots();
 }
 
+/** Generate a default name for a slot given its type and 1-based display index. */
+export function defaultSlotName(type: PlayerType, displayIndex: number): string {
+  if (type === 'ai') return `Bot ${displayIndex}`;
+  if (type === 'human') return `Player ${displayIndex}`;
+  return `P${displayIndex}`;
+}
+
 /** Rebuild the player slot array to match playerCount. */
 export function rebuildSlots(): void {
+  const prev = gameConfig.players;
   gameConfig.players = [];
+  let humanCount = 0;
+  let botCount = 0;
   for (let i = 0; i < gameConfig.playerCount; i++) {
     // Player 0 defaults to human; remaining slots default to AI bots.
-    gameConfig.players.push({
-      type: i === 0 ? 'human' : 'ai',
-    });
+    const type: PlayerType = i === 0 ? 'human' : 'ai';
+    // Preserve name if the slot already exists and had a non-default-looking name,
+    // otherwise generate a fresh default based on the type and counters.
+    const slotNum = type === 'human' ? ++humanCount : ++botCount;
+    const name = prev[i]?.name ?? defaultSlotName(type, slotNum);
+    gameConfig.players.push({ type, name });
   }
 }

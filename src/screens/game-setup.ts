@@ -4,6 +4,7 @@ import {
   gameConfig,
   rebuildSlots,
   resetConfig,
+  defaultSlotName,
   AI_DIFFICULTY_OPTIONS,
   type PlayerType,
 } from './game-config';
@@ -205,7 +206,7 @@ export function createGameSetup(
 
       const label = document.createElement('span');
       label.className = 'setup-slot-label';
-      label.textContent = `P${i + 1}`;
+      label.textContent = slot.name || `P${i + 1}`;
       row.appendChild(label);
 
       const typeBtn = document.createElement('button');
@@ -216,6 +217,8 @@ export function createGameSetup(
         const cycle: PlayerType[] = ['human', 'ai', 'off'];
         const cur = cycle.indexOf(slot.type);
         slot.type = cycle[(cur + 1) % cycle.length];
+        // Regenerate default name for the new type (use slot index + 1 as display number)
+        slot.name = defaultSlotName(slot.type, i + 1);
         render(container);
       });
 

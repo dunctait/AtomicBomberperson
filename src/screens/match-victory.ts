@@ -8,6 +8,7 @@ import {
   createTransitionHandler,
   formatResultsCount,
 } from './results-screen-shared';
+import { gameConfig } from './game-config';
 
 export function createMatchVictory(
   onTransition: (state: string) => void,
@@ -23,9 +24,10 @@ export function createMatchVictory(
     renderContent(content) {
       const panel = createResultsPanel('MATCH OVER');
 
+      const matchWinnerName = gameConfig.players[matchState.matchWinner]?.name ?? `Player ${matchState.matchWinner + 1}`;
       const winnerMsg = createResultsMessage(
         'results-match-winner',
-        `PLAYER ${matchState.matchWinner + 1} WINS THE MATCH!`,
+        `${matchWinnerName.toUpperCase()} WINS THE MATCH!`,
         matchState.matchWinner,
       );
       panel.appendChild(winnerMsg);

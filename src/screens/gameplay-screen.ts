@@ -443,6 +443,7 @@ export function renderPlayerHudRow(player: Player): string {
   const color = PLAYER_COLORS[player.index] || '#FFF';
   const opacity = player.alive ? '1' : '0.35';
   const status = player.alive ? '' : ' (DEAD)';
+  const displayName = player.name.length > 10 ? player.name.slice(0, 10) : player.name;
   const stats = player.alive
     ? [
         `<span class="hud-stat" title="Bombs">B:${player.stats.maxBombs}</span>`,
@@ -455,7 +456,7 @@ export function renderPlayerHudRow(player: Player): string {
   return [
     `<div class="hud-player" style="opacity:${opacity}">`,
     `<span class="hud-player-dot" style="background:${color}"></span>`,
-    `<span class="hud-player-label">P${player.index + 1}${status}</span>`,
+    `<span class="hud-player-label">${displayName}${status}</span>`,
     stats,
     '</div>',
   ].join('');
@@ -569,7 +570,7 @@ export function createGameplayScreen(
       const spawn = getSpawnForPlayerSlot(scheme, i);
       const spawnX = spawn ? spawn.x : 1;
       const spawnY = spawn ? spawn.y : 1;
-      const player = new Player(i, configPlayers[i].type, spawnX, spawnY);
+      const player = new Player(i, configPlayers[i].type, spawnX, spawnY, configPlayers[i].name);
       applySchemeStartingInventory(player, scheme.powerups);
       players.push(player);
 
@@ -875,7 +876,7 @@ export function createGameplayScreen(
 
       if (alivePlayers.length === 1) {
         const winner = alivePlayers[0];
-        gameOverMessage = `PLAYER ${winner.index + 1} WINS!`;
+        gameOverMessage = `${winner.name.toUpperCase()} WINS!`;
         gameOverWinnerIndex = winner.index;
       } else {
         gameOverMessage = 'DRAW!';

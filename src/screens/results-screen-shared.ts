@@ -2,6 +2,7 @@ import type { GameState } from '../engine/state-machine';
 import { matchState } from '../engine/match-manager';
 import { PLAYER_COLORS } from '../render/player-renderer';
 import { mountVirtualStage, type VirtualStageElements } from '../ui/virtual-stage';
+import { gameConfig } from './game-config';
 
 type ScoreboardOptions = {
   crownClass: string;
@@ -185,7 +186,8 @@ export function createResultsScoreboard(
 
     const label = document.createElement('span');
     label.className = 'results-player-label';
-    label.textContent = `P${i + 1}`;
+    const slotName = gameConfig.players[i]?.name;
+    label.textContent = slotName ? (slotName.length > 10 ? slotName.slice(0, 10) : slotName) : `P${i + 1}`;
     applyTextColor(label, color);
     row.appendChild(label);
 

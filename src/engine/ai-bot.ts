@@ -152,6 +152,8 @@ export class AIBot {
   private lastThinkRow = -1;
   /** How many consecutive think cycles the AI has been in the same cell. */
   private stuckCounter = 0;
+  /** Snapshot of all players, updated each think cycle. Used for spooger awareness. */
+  private cachedPlayers: Player[] = [];
 
   constructor(player: Player, difficulty: AIDifficulty = 'normal') {
     this.player = player;
@@ -200,6 +202,7 @@ export class AIBot {
     allPlayers: Player[],
   ): void {
     this.clearInputs();
+    this.cachedPlayers = allPlayers;
     const pos = this.player.getGridPos();
 
     // ── Stuck detection ──────────────────────────────────────────────
@@ -291,6 +294,11 @@ export class AIBot {
             !bombs.hasBomb(pos.col, pos.row) &&
             this.isCellSafe(pos.col, pos.row, grid, bombs) &&
             this.simPlaceBombIsSafe(pos.col, pos.row, grid, bombs)) {
+          // If we have spooger, face toward the nearest enemy so the bomb line extends toward them
+          if (this.player.stats.hasSpooger) {
+            const enemy = this.findNearestEnemy(allPlayers);
+            if (enemy) this.faceToward(pos, enemy);
+          }
           this.player.inputBomb = true;
           this.bombCooldown = this.player.stats.canKick ? this.settings.bombCooldownWithKick : this.settings.bombCooldownDefault;
           // Re-think quickly to flee
@@ -335,6 +343,32 @@ export class AIBot {
     for (let c = 0; c < GRID_COLS; c++) {
       for (let r = 0; r < GRID_ROWS; r++) {
         if (bombs.isExploding(c, r)) danger[c][r] = true;
+      }
+    }
+
+    // Mark cells that an enemy with spooger could immediately threaten.
+    // A spooger player can drop a line of bombs in their facing direction,
+    // so treat the cells in front of such enemies as potentially dangerous.
+    const spoogerDirDeltas: Record<string, { ddx: number; ddy: number }> = {
+      up: { ddx: 0, ddy: -1 },
+      down: { ddx: 0, ddy: 1 },
+      left: { ddx: -1, ddy: 0 },
+      right: { ddx: 1, ddy: 0 },
+    };
+    for (const p of this.cachedPlayers) {
+      if (p.index === this.player.index || !p.alive) continue;
+      if (!p.stats.hasSpooger || p.facing === 'none') continue;
+      const delta = spoogerDirDeltas[p.facing];
+      if (!delta) continue;
+      const ep = p.getGridPos();
+      for (let i = 0; i < p.stats.maxBombs; i++) {
+        const tc = ep.col + delta.ddx * i;
+        const tr = ep.row + delta.ddy * i;
+        if (!inBounds(tc, tr) || !grid.isWalkable(tc, tr)) break;
+        danger[tc][tr] = true;
+        traceBlast(tc, tr, p.stats.bombRange, grid, (c, r, brick) => {
+          if (!brick) danger[c][r] = true;
+        });
       }
     }
 

@@ -47,6 +47,7 @@ function getOppositeDirection(dir: Direction): Direction {
 export class Player {
   index: number;
   type: PlayerType;
+  name: string;
   alive: boolean;
 
   // Fractional grid coordinates (center of the player)
@@ -78,9 +79,10 @@ export class Player {
   private reverseDiseaseTimer = 0;
   private activeWarpIndex: number | null = null;
 
-  constructor(index: number, type: PlayerType, spawnX: number, spawnY: number) {
+  constructor(index: number, type: PlayerType, spawnX: number, spawnY: number, name?: string) {
     this.index = index;
     this.type = type;
+    this.name = name ?? `P${index + 1}`;
     this.alive = true;
     this.x = spawnX;
     this.y = spawnY;

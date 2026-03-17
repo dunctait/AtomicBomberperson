@@ -7,6 +7,7 @@ import {
   createResultsScreen,
   createTransitionHandler,
 } from './results-screen-shared';
+import { gameConfig } from './game-config';
 
 export function createRoundResults(
   onTransition: (state: string) => void,
@@ -24,11 +25,12 @@ export function createRoundResults(
       const panel = createResultsPanel(`ROUND ${matchState.roundNumber} RESULTS`);
 
       const roundWinner = matchState.lastRoundWinner;
+      const winnerName = roundWinner >= 0 ? (gameConfig.players[roundWinner]?.name ?? `Player ${roundWinner + 1}`) : '';
       const roundBanner =
         roundWinner >= 0
           ? createResultsMessage(
               'results-round-winner',
-              `PLAYER ${roundWinner + 1} WINS THE ROUND!`,
+              `${winnerName.toUpperCase()} WINS THE ROUND!`,
               roundWinner,
             )
           : createResultsMessage('results-draw', 'DRAW \u2014 NO WINNER THIS ROUND');
