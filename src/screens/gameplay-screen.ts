@@ -541,6 +541,9 @@ export function createGameplayScreen(
   const SHAKE_MAX_INTENSITY = 1.5; // hard cap
   const TIMER_WARNING_THRESHOLD = 30; // seconds remaining before warning style
 
+  // Pause state
+  let paused = false;
+
   // Win condition state
   let gameOver = false;
   let gameOverTimer = 0;
@@ -628,6 +631,11 @@ export function createGameplayScreen(
     if (gameOver) {
       renderGameOverOverlay(ctx);
     }
+
+    // Draw pause overlay (on top of everything)
+    if (paused) {
+      renderPauseOverlay(ctx);
+    }
   }
 
   function renderGameOverOverlay(ctx: CanvasRenderingContext2D): void {
@@ -706,6 +714,47 @@ export function createGameplayScreen(
     );
   }
 
+  function renderPauseOverlay(ctx: CanvasRenderingContext2D): void {
+    const w = canvas.width;
+    const h = canvas.height;
+
+    renderFullscreenOverlay(ctx, w, h, 0.65);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    renderCenteredOverlayText(
+      ctx,
+      'PAUSED',
+      w / 2,
+      h / 2 - 40,
+      'bold 28px "Press Start 2P", monospace',
+      '#FFF',
+      '#FFF',
+      14,
+    );
+
+    resetOverlayTextEffects(ctx);
+
+    renderCenteredOverlayText(
+      ctx,
+      'RESUME  [ESC / ENTER]',
+      w / 2,
+      h / 2 + 8,
+      '10px "Press Start 2P", monospace',
+      '#53d8fb',
+    );
+
+    renderCenteredOverlayText(
+      ctx,
+      'QUIT TO MENU  [Q]',
+      w / 2,
+      h / 2 + 34,
+      '10px "Press Start 2P", monospace',
+      '#e94560',
+    );
+  }
+
   function handleBombPlacement(): BombEvents {
     const triggeredEvents: BombEvents = {
       bricksDestroyed: [],
@@ -747,7 +796,27 @@ export function createGameplayScreen(
       } else if (p.stats.activeBombs < p.stats.maxBombs) {
         const { col, row } = p.getGridPos();
 
-        if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange, p.stats.hasJelly)) {
+        if (p.stats.hasSpooger && p.facing !== 'none') {
+          // Spooger: place a line of bombs extending in the facing direction
+          const facing = p.facing as 'up' | 'down' | 'left' | 'right';
+          const dirDeltas: Record<string, { ddx: number; ddy: number }> = {
+            up: { ddx: 0, ddy: -1 },
+            down: { ddx: 0, ddy: 1 },
+            left: { ddx: -1, ddy: 0 },
+            right: { ddx: 1, ddy: 0 },
+          };
+          const { ddx, ddy } = dirDeltas[facing];
+          let placed = false;
+          for (let dist = 0; p.stats.activeBombs < p.stats.maxBombs; dist++) {
+            const tc = col + ddx * dist;
+            const tr = row + ddy * dist;
+            if (!gameGrid.isWalkable(tc, tr)) break;
+            if (!bombManager.placeBomb(tc, tr, p.index, p.stats.bombRange, p.stats.hasJelly)) break;
+            p.stats.activeBombs++;
+            placed = true;
+          }
+          if (placed) soundManager.play('BOMBDROP.WAV');
+        } else if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange, p.stats.hasJelly)) {
           p.stats.activeBombs++;
           soundManager.play('BOMBDROP.WAV');
         }
@@ -844,7 +913,7 @@ export function createGameplayScreen(
 
     const controls = document.createElement('span');
     controls.className = 'gameplay-controls';
-    controls.textContent = 'P1: Arrows+SPACE | P2: WASD+E/Shift | ESC: quit';
+    controls.textContent = 'P1: Arrows+SPACE | P2: WASD+E/Shift | ESC: pause';
 
     root.append(mapMeta, hudTimerEl, controls);
     return { root, mapName, mapSource, ...hudSummaries };
@@ -941,7 +1010,8 @@ export function createGameplayScreen(
       }
       matchState.roundNumber++;
 
-      // Reset game over state
+      // Reset pause and game over state
+      paused = false;
       gameOver = false;
       gameOverTimer = 0;
       gameOverMessage = '';
@@ -987,6 +1057,12 @@ export function createGameplayScreen(
 
     onUpdate(dt: number) {
       if (!initialized) return;
+
+      // When paused, freeze game logic but keep rendering the pause overlay
+      if (paused) {
+        render();
+        return;
+      }
 
       elapsedTime += dt;
 
@@ -1148,11 +1224,27 @@ export function createGameplayScreen(
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        // Reset match so next game starts fresh
-        clearMatchProgress();
-        onTransition('main-menu');
+        if (!initialized || gameOver || countdownActive) {
+          // During game-over or countdown, Escape quits immediately as before
+          clearMatchProgress();
+          onTransition('main-menu');
+          return;
+        }
+        // Toggle pause during active gameplay
+        paused = !paused;
         return;
       }
+
+      if (paused) {
+        if (e.key === 'Enter') {
+          paused = false;
+        } else if (e.key === 'q' || e.key === 'Q') {
+          clearMatchProgress();
+          onTransition('main-menu');
+        }
+        return;
+      }
+
       // Prevent browser defaults for game keys (scrolling, etc.)
       if (e.key === ' ' || e.key.startsWith('Arrow')) {
         e.preventDefault();
@@ -1163,6 +1255,7 @@ export function createGameplayScreen(
     },
 
     onKeyUp(e: KeyboardEvent) {
+      if (paused) return;
       if (initialized && !gameOver && !countdownActive) {
         inputManager.onKeyUp(e);
       }
