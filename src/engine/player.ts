@@ -22,8 +22,19 @@ export interface PlayerStats {
 const HITBOX = 0.6;
 /** Half the hitbox size. */
 const HALF = HITBOX / 2;
-/** Threshold for corner-slide nudging (how far off-center is tolerable). */
-const SLIDE_THRESHOLD = 0.45;
+/**
+ * Corner-slide threshold: how far off-center (in tiles) the player can be
+ * and still get nudged around a corner. fpc_atomic uses 0.25 in a 0-1 cell
+ * scale (= 0.5 in our 1-tile scale). html5-bombergirl uses ~0.625. We use
+ * a generous value for that classic smooth Bomberman feel.
+ */
+const SLIDE_THRESHOLD = 0.55;
+/**
+ * Corner-slide nudge speed multiplier. The perpendicular nudge is applied
+ * at this factor of the player's movement speed, making corner rounding
+ * feel responsive rather than sluggish.
+ */
+const SLIDE_NUDGE_FACTOR = 1.5;
 const SLOW_DISEASE_MULTIPLIER = 0.55;
 const CONVEYOR_SPEED = 1.4;
 /** Duration of the death animation in seconds. */
@@ -318,21 +329,28 @@ export class Player {
     };
   }
 
+  /**
+   * Compute which grid cells the hitbox overlaps at a given position.
+   * Returns { minCol, maxCol, minRow, maxRow }.
+   */
+  private hitboxCells(px: number, py: number): { minCol: number; maxCol: number; minRow: number; maxRow: number } {
+    return {
+      minCol: Math.floor(px - HALF + 0.5),
+      maxCol: Math.floor(px + HALF + 0.5 - 0.001),
+      minRow: Math.floor(py - HALF + 0.5),
+      maxRow: Math.floor(py + HALF + 0.5 - 0.001),
+    };
+  }
+
   /** Check if the player hitbox at (px, py) overlaps any non-walkable cell or blocking bomb. */
   private canMoveTo(px: number, py: number, grid: GameGrid, bombs: BombManager): boolean {
-    // Compute the cells the hitbox overlaps.
-    // Player coordinates use a center-of-tile convention: position N means the
-    // center of tile N, so tile N spans [N-0.5, N+0.5).  We convert hitbox
-    // edges to tile indices by adding 0.5 before flooring.
-    const left   = px - HALF;
-    const right  = px + HALF;
-    const top    = py - HALF;
-    const bottom = py + HALF;
+    const { minCol, maxCol, minRow, maxRow } = this.hitboxCells(px, py);
 
-    const minCol = Math.floor(left + 0.5);
-    const maxCol = Math.floor(right + 0.5 - 0.001);
-    const minRow = Math.floor(top + 0.5);
-    const maxRow = Math.floor(bottom + 0.5 - 0.001);
+    // Cells the player CURRENTLY overlaps — bombs in these cells should not
+    // block movement, otherwise the player gets trapped when an enemy bomb
+    // is placed/kicked into their position. This mirrors classic Bomberman
+    // behavior where bombs only block ENTRY, not escape.
+    const cur = this.hitboxCells(this.x, this.y);
 
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
@@ -344,7 +362,12 @@ export class Player {
         if (!grid.isWalkable(c, r)) {
           return false;
         }
-        if (bombs.isBombBlocking(c, r, this.index)) {
+        // Only check bomb blocking for cells the player is NEWLY entering.
+        // Cells already overlapped by the current hitbox are "escaped" —
+        // the player shouldn't be trapped by a bomb they're already on.
+        const alreadyOverlapping = c >= cur.minCol && c <= cur.maxCol &&
+                                    r >= cur.minRow && r <= cur.maxRow;
+        if (!alreadyOverlapping && bombs.isBombBlocking(c, r, this.index)) {
           return false;
         }
       }
@@ -355,10 +378,15 @@ export class Player {
   /**
    * Corner sliding: when the player is blocked, check if nudging perpendicular
    * would let them slip around a corner. This is the classic Bomberman feel.
+   *
+   * Inspired by fpc_atomic's proportional nudging and Atomic-Bomberman-cpp's
+   * diagonal neighbor checks. The nudge speed is boosted by SLIDE_NUDGE_FACTOR
+   * so corner rounding feels snappy, not sluggish.
    */
   private applyCornerSlide(dt: number, grid: GameGrid, bombs: BombManager): void {
     const dir = this.moveDirection;
-    const speed = this.stats.speed * dt;
+    const speed = this.getMovementSpeed() * dt;
+    const nudgeSpeed = speed * SLIDE_NUDGE_FACTOR;
 
     if (dir === 'up' || dir === 'down') {
       // Moving vertically -- try nudging horizontally
@@ -369,8 +397,8 @@ export class Player {
       if (Math.abs(offset) < SLIDE_THRESHOLD && Math.abs(offset) > 0.01) {
         // Check if aligning to nearestCol would allow the vertical move
         if (this.canMoveTo(nearestCol, this.y + dy, grid, bombs)) {
-          // Nudge horizontally toward alignment
-          const nudge = Math.min(speed, Math.abs(offset));
+          // Nudge horizontally toward alignment at boosted speed
+          const nudge = Math.min(nudgeSpeed, Math.abs(offset));
           this.x += offset > 0 ? -nudge : nudge;
           return;
         }
@@ -383,7 +411,7 @@ export class Player {
 
       if (Math.abs(offset) < SLIDE_THRESHOLD && Math.abs(offset) > 0.01) {
         if (this.canMoveTo(this.x + dx, nearestRow, grid, bombs)) {
-          const nudge = Math.min(speed, Math.abs(offset));
+          const nudge = Math.min(nudgeSpeed, Math.abs(offset));
           this.y += offset > 0 ? -nudge : nudge;
           return;
         }
