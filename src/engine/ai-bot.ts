@@ -96,6 +96,46 @@ const NAV_DIRECTION_DEADZONE = 0.05;
  * Value must be > one movement step to avoid oscillation.
  */
 const NAV_PERPENDICULAR_ALIGN = 0.1;
+/**
+ * Movement alignment threshold derived from physics: 0.5 - HITBOX_HALF (0.3).
+ * When the AI's perpendicular offset from the nearest integer exceeds this,
+ * the 0.6-wide hitbox straddles into the adjacent column/row, which may
+ * contain a wall.  The AI must correct alignment before continuing.
+ */
+const NAV_HITBOX_ALIGN = 0.2;
+
+// ---------------------------------------------------------------------------
+// Blast-tracing helpers (shared by danger map, safety checks, attack scoring)
+// ---------------------------------------------------------------------------
+
+/** Is (col, row) within bounds? */
+function inBounds(col: number, row: number): boolean {
+  return col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS;
+}
+
+/**
+ * Trace a bomb's blast from (bombCol, bombRow) in all four directions,
+ * calling `visitor` for each cell reached.  Stops at grid edges, solid
+ * walls, and bricks (visitor IS called for the brick cell).
+ * Returns early if visitor returns `true` (short-circuit).
+ */
+function traceBlast(
+  bombCol: number, bombRow: number, range: number, grid: GameGrid,
+  visitor: (col: number, row: number, hitBrick: boolean) => boolean | void,
+): void {
+  for (const dir of DIRS) {
+    for (let i = 1; i <= range; i++) {
+      const c = bombCol + dir.dx * i;
+      const r = bombRow + dir.dy * i;
+      if (!inBounds(c, r)) break;
+      const cell = grid.getCell(c, r);
+      if (!cell || cell.type === CellContent.Solid) break;
+      const isBrick = cell.type === CellContent.Brick;
+      if (visitor(c, r, isBrick)) return;
+      if (isBrick) break;
+    }
+  }
+}
 
 export class AIBot {
   player: Player;
@@ -117,7 +157,7 @@ export class AIBot {
     this.player = player;
     this.difficulty = difficulty;
     const settings = DIFFICULTY_SETTINGS[this.difficulty];
-    this.thinkTimer = Math.random() * settings.thinkIntervalBase;
+    this.thinkTimer = 0; // Think immediately; subsequent intervals provide stagger
     this.currentGoal = 'wander';
     this.path = [];
     this.pathIndex = 0;
@@ -201,7 +241,7 @@ export class AIBot {
     // Hard bots preemptively flee: check if in any bomb's blast range even
     // before the cell is considered "unsafe" by normal standards.
     const inDanger = !this.isCellSafe(pos.col, pos.row, grid, bombs);
-    const shouldFlee = inDanger || (this.settings.preemptiveFlee && this.isInBlastRange(pos.col, pos.row, grid, bombs));
+    const shouldFlee = inDanger || (this.settings.preemptiveFlee && this.isInBlastZone(pos.col, pos.row, grid, bombs));
 
     if (shouldFlee) {
       // Easy bots have a delayed flee response
@@ -286,17 +326,9 @@ export class AIBot {
     for (const bomb of bombs.bombs) {
       if (bomb.exploded) continue;
       danger[bomb.col][bomb.row] = true;
-
-      for (const dir of DIRS) {
-        for (let i = 1; i <= bomb.range; i++) {
-          const c = bomb.col + dir.dx * i;
-          const r = bomb.row + dir.dy * i;
-          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-          const cell = grid.getCell(c, r);
-          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-          danger[c][r] = true;
-        }
-      }
+      traceBlast(bomb.col, bomb.row, bomb.range, grid, (c, r, brick) => {
+        if (!brick) danger[c][r] = true;
+      });
     }
 
     // Also mark active explosions
@@ -312,22 +344,13 @@ export class AIBot {
   /** Add a simulated bomb's blast to an existing danger map (fpc_atomic: SimPlaceBomb). */
   private addSimulatedBombToDangerMap(
     danger: boolean[][],
-    bombCol: number,
-    bombRow: number,
-    range: number,
-    grid: GameGrid,
+    bombCol: number, bombRow: number,
+    range: number, grid: GameGrid,
   ): void {
     danger[bombCol][bombRow] = true;
-    for (const dir of DIRS) {
-      for (let i = 1; i <= range; i++) {
-        const c = bombCol + dir.dx * i;
-        const r = bombRow + dir.dy * i;
-        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-        const cell = grid.getCell(c, r);
-        if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-        danger[c][r] = true;
-      }
-    }
+    traceBlast(bombCol, bombRow, range, grid, (c, r, brick) => {
+      if (!brick) danger[c][r] = true;
+    });
   }
 
   /**
@@ -363,7 +386,7 @@ export class AIBot {
         const nr = cur.row + dir.dy;
         const key = `${nc},${nr}`;
         if (visited.has(key)) continue;
-        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        if (!inBounds(nc, nr)) continue;
         if (!grid.isWalkable(nc, nr)) continue;
         if (bombs.hasBomb(nc, nr)) continue;
         visited.add(key);
@@ -378,49 +401,23 @@ export class AIBot {
   // Cell safety (uses bomb blast tracing, not the full danger map)
   // ---------------------------------------------------------------------------
 
-  private isCellSafe(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
-    if (bombs.isExploding(col, row)) return false;
-
-    for (const bomb of bombs.bombs) {
-      if (bomb.exploded) continue;
-      if (bomb.col === col && bomb.row === row) return false;
-
-      for (const dir of DIRS) {
-        for (let i = 1; i <= bomb.range; i++) {
-          const c = bomb.col + dir.dx * i;
-          const r = bomb.row + dir.dy * i;
-          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-          const cell = grid.getCell(c, r);
-          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-          if (c === col && r === row) return false;
-        }
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Check if a cell is within any bomb's blast range (used by Hard bots for
-   * preemptive fleeing). Unlike isCellSafe, this returns true even for bombs
-   * that haven't started their fuse countdown — the Hard bot anticipates.
-   */
-  private isInBlastRange(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
+  /** Is (col, row) in any unexploded bomb's blast zone? */
+  private isInBlastZone(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
     for (const bomb of bombs.bombs) {
       if (bomb.exploded) continue;
       if (bomb.col === col && bomb.row === row) return true;
-
-      for (const dir of DIRS) {
-        for (let i = 1; i <= bomb.range; i++) {
-          const c = bomb.col + dir.dx * i;
-          const r = bomb.row + dir.dy * i;
-          if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-          const cell = grid.getCell(c, r);
-          if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-          if (c === col && r === row) return true;
-        }
-      }
+      let hit = false;
+      traceBlast(bomb.col, bomb.row, bomb.range, grid, (c, r) => {
+        if (c === col && r === row) { hit = true; return true; }
+      });
+      if (hit) return true;
     }
     return false;
+  }
+
+  /** Is the cell safe from ALL threats (blast zones + active explosions)? */
+  private isCellSafe(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
+    return !bombs.isExploding(col, row) && !this.isInBlastZone(col, row, grid, bombs);
   }
 
   // ---------------------------------------------------------------------------
@@ -449,7 +446,7 @@ export class AIBot {
         const key = `${nc},${nr}`;
         // With kick or punch, the AI can pass through bomb cells (it will kick/punch them away)
         const passable = grid.isWalkable(nc, nr) && (canMoveThroughBombs || !bombs.hasBomb(nc, nr));
-        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+        if (!visited.has(key) && inBounds(nc, nr) &&
             passable) {
           visited.add(key);
           queue.push({ col: nc, row: nr });
@@ -531,7 +528,7 @@ export class AIBot {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-        if (!visited.has(key) && nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+        if (!visited.has(key) && inBounds(nc, nr) &&
             grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
           visited.add(key);
           queue.push({ col: nc, row: nr, dist: current.dist + 1 });
@@ -545,41 +542,22 @@ export class AIBot {
   /** Count how many bricks a bomb at (col, row) would destroy. */
   private countBricksHit(col: number, row: number, range: number, grid: GameGrid): number {
     let count = 0;
-    for (const dir of DIRS) {
-      for (let i = 1; i <= range; i++) {
-        const c = col + dir.dx * i;
-        const r = row + dir.dy * i;
-        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-        const cell = grid.getCell(c, r);
-        if (!cell) break;
-        if (cell.type === CellContent.Solid) break;
-        if (cell.type === CellContent.Brick) {
-          count++;
-          break; // blast stops at brick
-        }
-      }
-    }
+    traceBlast(col, row, range, grid, (_c, _r, brick) => { if (brick) count++; });
     return count;
   }
 
   /** Would a bomb at (col, row) hit any enemy player? */
   private wouldHitEnemy(col: number, row: number, range: number, grid: GameGrid, allPlayers: Player[]): boolean {
-    for (const dir of DIRS) {
-      for (let i = 1; i <= range; i++) {
-        const c = col + dir.dx * i;
-        const r = row + dir.dy * i;
-        if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) break;
-        const cell = grid.getCell(c, r);
-        if (!cell || cell.type === CellContent.Solid || cell.type === CellContent.Brick) break;
-        for (const p of allPlayers) {
-          if (p.index !== this.player.index && p.alive) {
-            const pp = p.getGridPos();
-            if (pp.col === c && pp.row === r) return true;
-          }
+    let hit = false;
+    traceBlast(col, row, range, grid, (c, r) => {
+      for (const p of allPlayers) {
+        if (p.index !== this.player.index && p.alive) {
+          const pp = p.getGridPos();
+          if (pp.col === c && pp.row === r) { hit = true; return true; }
         }
       }
-    }
-    return false;
+    });
+    return hit;
   }
 
   private canPlaceBomb(bombs: BombManager): boolean {
@@ -601,7 +579,7 @@ export class AIBot {
       const nr = pos.row + dir.dy;
       const safe = this.isCellSafe(nc, nr, grid, bombs);
       const ignoreDanger = !safe && this.settings.dangerIgnoreChance > 0 && Math.random() < this.settings.dangerIgnoreChance;
-      if (nc >= 0 && nc < GRID_COLS && nr >= 0 && nr < GRID_ROWS &&
+      if (inBounds(nc, nr) &&
           grid.isWalkable(nc, nr) &&
           (canMoveThroughBombs || !bombs.hasBomb(nc, nr)) &&
           (safe || ignoreDanger)) {
@@ -645,7 +623,7 @@ export class AIBot {
         const nr = cur.row + dir.dy;
         const key = `${nc},${nr}`;
         if (visited.has(key)) continue;
-        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        if (!inBounds(nc, nr)) continue;
         if (!grid.isWalkable(nc, nr) || bombs.hasBomb(nc, nr)) continue;
         visited.add(key);
         queue.push({ col: nc, row: nr, dist: cur.dist + 1 });
@@ -703,7 +681,7 @@ export class AIBot {
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
         if (visited.has(key)) continue;
-        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        if (!inBounds(nc, nr)) continue;
         if (!grid.isWalkable(nc, nr)) continue;
         if (!allowBombs && bombs.hasBomb(nc, nr)) continue;
         if (!extraFilter(nc, nr)) continue;
@@ -754,6 +732,22 @@ export class AIBot {
   // Navigation
   // ---------------------------------------------------------------------------
 
+  /** Abort the current path and force an immediate re-think. */
+  private abortPath(): void {
+    this.path = [];
+    this.pathIndex = 0;
+    this.thinkTimer = 0;
+  }
+
+  /** Is waypoint dangerous and should the AI avoid it (non-flee goals)? */
+  private shouldAbortWaypoint(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
+    if (bombs.isExploding(col, row)) return true;
+    if (this.currentGoal !== 'flee' && !this.isCellSafe(col, row, grid, bombs)) {
+      return this.settings.dangerIgnoreChance <= 0 || Math.random() >= this.settings.dangerIgnoreChance;
+    }
+    return false;
+  }
+
   private navigatePath(grid: GameGrid, bombs: BombManager): void {
     this.clearInputs();
 
@@ -761,23 +755,8 @@ export class AIBot {
 
     const target = this.path[this.pathIndex];
 
-    // Safety check: if the next waypoint is dangerous and we're NOT fleeing,
-    // abort the path and force an immediate re-think.
-    // Easy bots sometimes ignore danger (dangerIgnoreChance).
-    if (this.currentGoal !== 'flee' && !this.isCellSafe(target.col, target.row, grid, bombs)) {
-      if (this.settings.dangerIgnoreChance <= 0 || Math.random() >= this.settings.dangerIgnoreChance) {
-        this.path = [];
-        this.pathIndex = 0;
-        this.thinkTimer = 0; // re-think next frame
-        return;
-      }
-    }
-
-    // Even when fleeing, if we're about to step into an active explosion, stop
-    if (bombs.isExploding(target.col, target.row)) {
-      this.path = [];
-      this.pathIndex = 0;
-      this.thinkTimer = 0;
+    if (this.shouldAbortWaypoint(target.col, target.row, grid, bombs)) {
+      this.abortPath();
       return;
     }
 
@@ -787,20 +766,14 @@ export class AIBot {
     // Check if we've arrived at the current waypoint.
     // When a perpendicular turn is coming, also require the AI to be aligned
     // on the axis perpendicular to the NEXT direction, so the hitbox clears
-    // the corner wall.  Without this, the AI switches direction too early and
-    // the 0.6-wide hitbox catches on the wall, wasting frames on corner slide.
+    // the corner wall.
     let arrived = Math.abs(dx) < NAV_ARRIVAL_THRESHOLD && Math.abs(dy) < NAV_ARRIVAL_THRESHOLD;
 
     if (arrived && this.pathIndex + 1 < this.path.length) {
       const next = this.path[this.pathIndex + 1];
-      const nextDx = next.col - target.col;
-      const nextDy = next.row - target.row;
-      const nextIsHoriz = nextDx !== 0;
-      // For a horizontal next move, the AI must be aligned vertically (dy small)
-      // For a vertical next move, the AI must be aligned horizontally (dx small)
+      const nextIsHoriz = (next.col - target.col) !== 0;
       const perpOffset = nextIsHoriz ? Math.abs(dy) : Math.abs(dx);
       if (perpOffset > NAV_PERPENDICULAR_ALIGN) {
-        // Not aligned enough — keep moving toward current waypoint
         arrived = false;
       }
     }
@@ -810,17 +783,8 @@ export class AIBot {
       if (this.pathIndex >= this.path.length) return;
       const next = this.path[this.pathIndex];
 
-      // Check the NEXT waypoint too
-      if (!this.isCellSafe(next.col, next.row, grid, bombs) && this.currentGoal !== 'flee') {
-        this.path = [];
-        this.pathIndex = 0;
-        this.thinkTimer = 0;
-        return;
-      }
-      if (bombs.isExploding(next.col, next.row)) {
-        this.path = [];
-        this.pathIndex = 0;
-        this.thinkTimer = 0;
+      if (this.shouldAbortWaypoint(next.col, next.row, grid, bombs)) {
+        this.abortPath();
         return;
       }
 
@@ -830,13 +794,51 @@ export class AIBot {
     }
   }
 
+  /**
+   * Choose the best movement direction toward (dx, dy) delta from the player.
+   *
+   * Alignment-aware (like fpc_atomic's "optical fine navigation" and
+   * jsbomberman's snap-before-turn):  when the primary direction is vertical
+   * but the AI isn't horizontally aligned with the target column, the 0.6-wide
+   * hitbox will clip a wall.  In that case, move horizontally first to align.
+   * Vice versa for horizontal movement.
+   *
+   * The critical offset is 0.5 - HITBOX_HALF (0.3) = 0.2.  Beyond that, the
+   * hitbox straddles into the adjacent column/row, potentially hitting a wall.
+   */
   private setDirectionToward(dx: number, dy: number): void {
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > NAV_DIRECTION_DEADZONE) this.player.setInput('right', true);
-      else if (dx < -NAV_DIRECTION_DEADZONE) this.player.setInput('left', true);
-    } else {
-      if (dy > NAV_DIRECTION_DEADZONE) this.player.setInput('down', true);
-      else if (dy < -NAV_DIRECTION_DEADZONE) this.player.setInput('up', true);
+    const wantVertical = Math.abs(dy) >= Math.abs(dx);
+
+    if (wantVertical && Math.abs(dy) > NAV_DIRECTION_DEADZONE) {
+      // Want to move up/down — check horizontal alignment first.
+      // The AI needs its x offset from the nearest integer column to be small
+      // enough that the hitbox doesn't clip into an adjacent column.
+      // Threshold: 0.5 - HITBOX_HALF (0.3) = 0.2 — beyond this, the hitbox
+      // straddles into the next column which may contain a wall.
+      const nearestCol = Math.round(this.player.x);
+      const xOffset = Math.abs(this.player.x - nearestCol);
+      if (xOffset > NAV_HITBOX_ALIGN && Math.abs(dx) > NAV_DIRECTION_DEADZONE) {
+        // Not aligned — move horizontally toward the waypoint's column
+        if (dx > 0) this.player.setInput('right', true);
+        else this.player.setInput('left', true);
+      } else {
+        // Aligned — move vertically
+        if (dy > NAV_DIRECTION_DEADZONE) this.player.setInput('down', true);
+        else if (dy < -NAV_DIRECTION_DEADZONE) this.player.setInput('up', true);
+      }
+    } else if (Math.abs(dx) > NAV_DIRECTION_DEADZONE) {
+      // Want to move left/right — check vertical alignment first.
+      const nearestRow = Math.round(this.player.y);
+      const yOffset = Math.abs(this.player.y - nearestRow);
+      if (yOffset > NAV_HITBOX_ALIGN && Math.abs(dy) > NAV_DIRECTION_DEADZONE) {
+        // Not aligned — move vertically toward the waypoint's row
+        if (dy > 0) this.player.setInput('down', true);
+        else this.player.setInput('up', true);
+      } else {
+        // Aligned — move horizontally
+        if (dx > NAV_DIRECTION_DEADZONE) this.player.setInput('right', true);
+        else if (dx < -NAV_DIRECTION_DEADZONE) this.player.setInput('left', true);
+      }
     }
   }
 

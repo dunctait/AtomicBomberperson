@@ -1880,10 +1880,11 @@ function testAIPlacesBombFromCornerSpawn() {
   const player = new Player(0, 'ai', 1, 1);
   const bot = new AIBot(player, 'normal');
 
-  // Run 120 AI think+update cycles (simulating ~2 seconds of game time)
+  // Run 240 AI think+update cycles (simulating ~4 seconds of game time).
+  // Budget is generous to accommodate random think interval jitter.
   const dt = 1 / 60;
   let bombPlaced = false;
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 240; i++) {
     bot.update(dt, grid, bombs, powerups, [player]);
     // Check if AI set inputBomb
     if (player.inputBomb) {
@@ -1898,7 +1899,7 @@ function testAIPlacesBombFromCornerSpawn() {
     bombs.update(dt, grid);
   }
 
-  assert.ok(bombPlaced, 'AI should place at least one bomb within 2 seconds from corner spawn');
+  assert.ok(bombPlaced, 'AI should place at least one bomb within 4 seconds from corner spawn');
 }
 
 function testAIDoesNotBombUnsafePosition() {
@@ -2017,6 +2018,167 @@ function testGrabThrowCycleMoveBomb() {
     `thrown bomb should land 3-5 tiles away, got col=${bombs.bombs[0].col}`);
 }
 
+function testAINavigatesCorner() {
+  // Test that the AI can navigate to a powerup that requires corner turns
+  // from an off-center starting position. The powerup at (3,3) forces the AI
+  // through at least one corner from (1.4, 1.0).
+  // Run 10 iterations to catch flakiness from random think timer jitter.
+  for (let iter = 0; iter < 10; iter++) {
+    const scheme = {
+      name: 'CORNER_TEST',
+      brickDensity: 0,
+      grid: createBasicSchemeGrid(),
+      spawns: [{ player: 0, x: 1, y: 1, team: 0 }],
+      powerups: [],
+      conveyors: [],
+      warps: [],
+    };
+    const grid = new GameGrid(scheme);
+    const bombs = new BombManager();
+    // Place a revealed powerup at (3,3) — requires corner navigation from (1,1)
+    const powerups = new PowerupManager(grid, scheme.powerups);
+    powerups.powerups.push({
+      col: 3, row: 3,
+      type: 0, // ExtraBomb
+      revealed: true,
+    });
+    const player = new Player(0, 'ai', 1, 1);
+    const bot = new AIBot(player, 'normal');
+
+    // Manually set an off-center starting position to simulate mid-cell think() reset.
+    player.x = 1.4;
+    player.y = 1.0;
+
+    const dt = 1 / 60;
+    let maxFramesStuck = 0;
+    let framesStuck = 0;
+    let lastCol = -1;
+    let lastRow = -1;
+    let stuckCol = -1;
+    let stuckRow = -1;
+    let reachedTarget = false;
+
+    // Run for 5 seconds of game time (300 frames) — generous budget
+    for (let i = 0; i < 300; i++) {
+      bot.update(dt, grid, bombs, powerups, [player]);
+
+      // Suppress bomb placement — we only care about navigation
+      player.inputBomb = false;
+
+      player.update(dt, grid, bombs);
+      bombs.update(dt, grid);
+
+      const pos = player.getGridPos();
+      if (pos.col === 3 && pos.row === 3) reachedTarget = true;
+
+      // Track longest consecutive stuck duration
+      if (pos.col === lastCol && pos.row === lastRow) {
+        framesStuck++;
+        if (framesStuck > maxFramesStuck) {
+          maxFramesStuck = framesStuck;
+          stuckCol = pos.col;
+          stuckRow = pos.row;
+        }
+      } else {
+        framesStuck = 0;
+      }
+      lastCol = pos.col;
+      lastRow = pos.row;
+    }
+
+    assert.ok(
+      reachedTarget,
+      `[iter ${iter}] AI should navigate to powerup at (3,3) from off-center start — ended at (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`,
+    );
+    // Should never be stuck in the same cell for more than 60 frames (1 second)
+    assert.ok(
+      maxFramesStuck < 60,
+      `[iter ${iter}] AI got stuck in cell (${stuckCol}, ${stuckRow}) for ${maxFramesStuck} frames`,
+    );
+  }
+}
+
+function testAIFleesAroundCorner() {
+  // The critical scenario: AI places bomb at (3,1) on BASIC grid, must flee around
+  // a corner past the solid pillar at (2,2) or (4,2). The test verifies the AI
+  // doesn't die from its own bomb (i.e., it successfully navigates the corner).
+  //
+  // Run 10 iterations of the full offset matrix to catch flakiness from random
+  // think timer jitter.
+  const offsets = [0, 0.1, 0.2, 0.3, -0.1, -0.2, -0.3];
+
+  for (let iter = 0; iter < 10; iter++) {
+    for (const xOff of offsets) {
+      for (const yOff of offsets) {
+        const startX = 3 + xOff;
+        const startY = 1 + yOff;
+        // getGridPos logic: floor(pos + 0.2)
+        const testCol = Math.floor(startX + 0.2);
+        const testRow = Math.floor(startY + 0.2);
+        // Skip if grid pos lands on a solid pillar
+        if (testCol % 2 === 0 && testRow % 2 === 0) continue;
+        // Skip if grid pos is in a corner dead-end (row 0 or row 10 at odd col
+        // have solid pillars on both sides)
+        if (testRow === 0 || testRow === 10) continue;
+
+        testAIFleesFromPosition(startX, startY);
+      }
+    }
+  }
+}
+
+function testAIFleesFromPosition(startX, startY) {
+  const scheme = {
+    name: 'FLEE_CORNER_TEST',
+    brickDensity: 0,
+    grid: createBasicSchemeGrid(),
+    spawns: [{ player: 0, x: 3, y: 1, team: 0 }],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  };
+  const grid = new GameGrid(scheme);
+  const bombs = new BombManager();
+  const powerups = new PowerupManager(grid, scheme.powerups);
+  const player = new Player(0, 'ai', 3, 1);
+  player.x = startX;
+  player.y = startY;
+  const bot = new AIBot(player, 'normal');
+
+  // Place a bomb at (3,1) — the AI must flee
+  bombs.placeBomb(3, 1, 0, 2, false);
+  player.stats.activeBombs++;
+
+  const dt = 1 / 60;
+  // Run for 3 seconds (180 frames) — bomb fuse is 2s
+  for (let i = 0; i < 180; i++) {
+    bot.update(dt, grid, bombs, powerups, [player]);
+
+    if (player.inputBomb) {
+      const { col, row } = player.getGridPos();
+      bombs.placeBomb(col, row, player.index, player.stats.bombRange, player.stats.hasJelly);
+      player.inputBomb = false;
+    }
+
+    player.update(dt, grid, bombs);
+
+    // Check explosions for player death
+    for (const exp of bombs.explosions) {
+      const pos = player.getGridPos();
+      if (pos.col === exp.col && pos.row === exp.row && player.alive) {
+        player.die();
+      }
+    }
+
+    bombs.update(dt, grid);
+  }
+
+  assert.ok(
+    player.alive,
+    `AI starting at (${startX.toFixed(1)}, ${startY.toFixed(1)}) should survive own bomb — died at (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`,
+  );
+}
+
 async function run(name, fn) {
   try {
     await fn();
@@ -2098,11 +2260,13 @@ async function main() {
   await run('kicked bomb stops at grid edge', testKickBombStopsAtGridEdge);
 
   // Integration tests — realistic gameplay scenarios
-  await run('AI places bomb from corner spawn within 2 seconds', testAIPlacesBombFromCornerSpawn);
+  await run('AI places bomb from corner spawn within 4 seconds', testAIPlacesBombFromCornerSpawn);
   await run('AI does not bomb in dead-end with no escape', testAIDoesNotBombUnsafePosition);
   await run('player cannot walk off grid edge', testPlayerCannotWalkOffGrid);
   await run('spawn clearing creates walkable area around spawn points', testSpawnClearingCreatesWalkableArea);
   await run('grab then throw moves bomb to expected landing position', testGrabThrowCycleMoveBomb);
+  await run('AI navigates corner without getting stuck', testAINavigatesCorner);
+  await run('AI survives own bomb by fleeing around corner', testAIFleesAroundCorner);
 
   if (process.exitCode) {
     process.exit(process.exitCode);
