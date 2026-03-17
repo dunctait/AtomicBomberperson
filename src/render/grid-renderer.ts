@@ -19,6 +19,15 @@ interface CrumblingBrick {
   timer: number; // counts up from 0 to BRICK_CRUMBLE_DURATION
 }
 
+/** Duration of the sudden-death wall slam flash in seconds. */
+const WALL_FLASH_DURATION = 0.35;
+
+interface WallFlash {
+  col: number;
+  row: number;
+  timer: number; // counts up from 0 to WALL_FLASH_DURATION
+}
+
 export class GridRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -31,6 +40,7 @@ export class GridRenderer {
   private crumbleSprites: HTMLCanvasElement[] | null = null;
   private fieldBackground: HTMLCanvasElement | null = null;
   private crumblingBricks: CrumblingBrick[] = [];
+  private wallFlashes: WallFlash[] = [];
   readonly loaded: Promise<void>;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -69,7 +79,14 @@ export class GridRenderer {
     }
   }
 
-  /** Update crumble animations */
+  /** Notify that sudden-death walls were placed — starts slam flash animations */
+  onSuddenDeathWalls(positions: { col: number; row: number }[]): void {
+    for (const pos of positions) {
+      this.wallFlashes.push({ col: pos.col, row: pos.row, timer: 0 });
+    }
+  }
+
+  /** Update crumble and wall-flash animations */
   update(dt: number): void {
     for (const brick of this.crumblingBricks) {
       brick.timer += dt;
@@ -77,6 +94,11 @@ export class GridRenderer {
     this.crumblingBricks = this.crumblingBricks.filter(
       (b) => b.timer < BRICK_CRUMBLE_DURATION,
     );
+
+    for (const flash of this.wallFlashes) {
+      flash.timer += dt;
+    }
+    this.wallFlashes = this.wallFlashes.filter((f) => f.timer < WALL_FLASH_DURATION);
   }
 
   /** Render the full grid using imported tile sprites */
@@ -122,6 +144,9 @@ export class GridRenderer {
 
     // Render crumbling brick animations on top
     this.renderCrumblingBricks(ctx, tw, th);
+
+    // Render sudden-death wall slam flash on top of everything
+    this.renderWallFlashes(ctx, tw, th);
   }
 
   private renderCrumblingBricks(
@@ -156,6 +181,32 @@ export class GridRenderer {
       ctx.drawImage(frame, x, y, tw, th);
       ctx.restore();
     }
+  }
+
+  private renderWallFlashes(
+    ctx: CanvasRenderingContext2D,
+    tw: number,
+    th: number,
+  ): void {
+    if (this.wallFlashes.length === 0) return;
+
+    ctx.save();
+    for (const flash of this.wallFlashes) {
+      // Progress goes 0→1 over WALL_FLASH_DURATION.
+      // Alpha peaks at 0 (i.e. at t=0 it's fully white) and fades quickly.
+      const progress = flash.timer / WALL_FLASH_DURATION;
+      // Use an exponential curve so the flash is very bright at first and fades fast.
+      const alpha = Math.max(0, 1 - progress * progress * progress * 1.5);
+      if (alpha <= 0) continue;
+
+      const x = flash.col * tw;
+      const y = flash.row * th;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, tw, th);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   /**

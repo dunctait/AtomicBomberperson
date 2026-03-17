@@ -34,7 +34,7 @@ export interface Explosion {
 }
 
 export interface BombEvents {
-  bricksDestroyed: { col: number; row: number }[];
+  bricksDestroyed: { col: number; row: number; owner: number }[];
   explosionPositions: { col: number; row: number }[];
 }
 
@@ -450,7 +450,7 @@ export class BombManager {
         // Brick: destroy it, add explosion, but stop spreading
         if (cell.type === CellContent.Brick) {
           grid.setCell(c, r, CellContent.Empty);
-          events.bricksDestroyed.push({ col: c, row: r });
+          events.bricksDestroyed.push({ col: c, row: r, owner: bomb.owner });
           this.explosions.push({
             col: c,
             row: r,

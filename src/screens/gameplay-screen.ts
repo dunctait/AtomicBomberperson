@@ -22,6 +22,13 @@ import { getAllFileNames, getFile } from '../assets/asset-db';
 import { soundManager } from '../engine/sound-manager';
 import { ParticleSystem } from '../engine/particles';
 import { SuddenDeath } from '../engine/sudden-death';
+import {
+  initRoundStats,
+  recordKill,
+  recordDeath,
+  recordBrickDestroyed,
+  recordPowerupCollected,
+} from '../engine/round-stats';
 
 interface GameplayMapMeta {
   name: string;
@@ -191,6 +198,14 @@ export async function resolveSchemeFile(
   }
 
   return schFile;
+}
+
+/** Resolve a random .SCH file from IndexedDB. Returns null if none are available. */
+export async function resolveRandomSchemeFile(): Promise<string | null> {
+  const allFiles = await getAllFileNames();
+  const schFiles = allFiles.filter((file) => file.toUpperCase().endsWith('.SCH'));
+  if (schFiles.length === 0) return null;
+  return schFiles[Math.floor(Math.random() * schFiles.length)];
 }
 
 /** Find and load a .SCH scheme file from IndexedDB */
@@ -557,6 +572,11 @@ export function createGameplayScreen(
   const suddenDeath = new SuddenDeath();
   let hudTimerEl: HTMLSpanElement | null = null;
 
+  // Sudden death announcement overlay
+  const SUDDEN_DEATH_ANNOUNCE_DURATION = 2.0;
+  let suddenDeathAnnounceTimer = -1; // -1 = not active
+  const SUDDEN_DEATH_WAVE_SHAKE = 1.2; // px shake per wall wave
+
   // HUD element reference
   let hudStatsEl: HTMLDivElement | null = null;
   let gameplayHud: GameplayHudElements | null = null;
@@ -581,6 +601,7 @@ export function createGameplayScreen(
     }
 
     inputManager = new InputManager(players);
+    initRoundStats(players.length);
   }
 
   function render(): void {
@@ -628,6 +649,11 @@ export function createGameplayScreen(
       renderCountdownOverlay(ctx);
     }
 
+    // Draw sudden death announcement overlay
+    if (suddenDeathAnnounceTimer >= 0 && !gameOver && !countdownActive) {
+      renderSuddenDeathAnnouncement(ctx);
+    }
+
     // Draw game over overlay
     if (gameOver) {
       renderGameOverOverlay(ctx);
@@ -637,6 +663,47 @@ export function createGameplayScreen(
     if (paused) {
       renderPauseOverlay(ctx);
     }
+  }
+
+  function renderSuddenDeathAnnouncement(ctx: CanvasRenderingContext2D): void {
+    const w = canvas.width;
+    const h = canvas.height;
+    const progress = suddenDeathAnnounceTimer / SUDDEN_DEATH_ANNOUNCE_DURATION;
+    // Fade in fast (first 15%), hold, then fade out over last 40%
+    let alpha: number;
+    if (progress < 0.15) {
+      alpha = progress / 0.15;
+    } else if (progress < 0.6) {
+      alpha = 1.0;
+    } else {
+      alpha = 1 - (progress - 0.6) / 0.4;
+    }
+    alpha = Math.max(0, Math.min(1, alpha));
+
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.45;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = alpha;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Outer glow
+    ctx.shadowColor = '#ff2200';
+    ctx.shadowBlur = 28;
+    ctx.font = 'bold 28px "Press Start 2P", monospace';
+    ctx.fillStyle = '#ff4400';
+    ctx.fillText('SUDDEN DEATH!', w / 2, h / 2);
+
+    // Crisp white text on top
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px "Press Start 2P", monospace';
+    ctx.fillText('SUDDEN DEATH!', w / 2, h / 2);
+
+    ctx.restore();
   }
 
   function renderGameOverOverlay(ctx: CanvasRenderingContext2D): void {
@@ -845,10 +912,18 @@ export function createGameplayScreen(
   function checkPlayerDeaths(): void {
     for (const p of players) {
       if (!p.alive) continue;
+      if (p.isInvincible()) continue;
       const { col, row } = p.getGridPos();
       if (bombManager.isExploding(col, row)) {
         p.die();
         soundManager.play('DIE.WAV');
+        recordDeath(p.index);
+        const killingExplosion = bombManager.explosions.find(
+          (e) => e.col === col && e.row === row,
+        );
+        if (killingExplosion !== undefined && killingExplosion.owner !== p.index) {
+          recordKill(killingExplosion.owner);
+        }
       }
     }
   }
@@ -861,6 +936,8 @@ export function createGameplayScreen(
       if (collected) {
         applyPowerup(collected.type, p);
         soundManager.play('POWERUP.WAV');
+        particleSystem.emitPowerupCollect(col, row);
+        recordPowerupCollected(p.index);
       }
     }
   }
@@ -920,14 +997,21 @@ export function createGameplayScreen(
     return { root, mapName, mapSource, ...hudSummaries };
   }
 
-  function initializeGameplaySystems(activeScheme: ParsedScheme): GameplaySchemeSummary {
+  function initializeGameplaySystems(activeScheme: ParsedScheme, randomFileUsed?: string): GameplaySchemeSummary {
     scheme = activeScheme;
-    currentMapMeta = getGameplayMapMeta(
-      gameConfig.map,
-      gameConfig.mapFile,
-      scheme.name,
-      scheme.name === 'FALLBACK',
-    );
+    if (gameConfig.randomMap) {
+      const randomLabel = randomFileUsed
+        ? randomFileUsed.split(/[\/]/).pop()?.replace(/.sch$/i, '').toUpperCase() ?? scheme.name
+        : scheme.name;
+      currentMapMeta = getGameplayMapMeta(randomLabel, randomFileUsed ?? null, scheme.name, scheme.name === 'FALLBACK');
+    } else {
+      currentMapMeta = getGameplayMapMeta(
+        gameConfig.map,
+        gameConfig.mapFile,
+        scheme.name,
+        scheme.name === 'FALLBACK',
+      );
+    }
     // Apply brick density override from game config if set
     if (gameConfig.brickDensityOverride !== null) {
       scheme.brickDensity = gameConfig.brickDensityOverride;
@@ -1021,30 +1105,49 @@ export function createGameplayScreen(
       // Reset round timer and sudden death
       roundTimeRemaining = gameConfig.roundTimerSeconds;
       suddenDeath.reset();
+      suddenDeathAnnounceTimer = -1;
 
       // Start countdown
       countdownActive = true;
       countdownTimer = 0;
 
-      // Load scheme and all renderer assets before revealing the game
-      loadScheme(gameConfig.map, gameConfig.mapFile)
-        .catch(() => {
+      // Load scheme and all renderer assets before revealing the game.
+      // When randomMap is active, pick a random .SCH file each round.
+      const buildSchemePromise = (): Promise<ParsedScheme> => {
+        if (gameConfig.randomMap) {
+          return resolveRandomSchemeFile().then((randomFile) => {
+            if (!randomFile) {
+              currentMapMeta = getGameplayMapMeta('RANDOM', null, 'FALLBACK', true);
+              return createFallbackScheme();
+            }
+            const randomLabel =
+              randomFile.split(/[\/]/).pop()?.replace(/.sch$/i, '').toUpperCase() ?? 'RANDOM';
+            currentMapMeta = getGameplayMapMeta(randomLabel, randomFile);
+            return loadScheme(randomLabel, randomFile).catch(() => {
+              currentMapMeta = getGameplayMapMeta(randomLabel, randomFile, 'FALLBACK', true);
+              return createFallbackScheme();
+            });
+          });
+        }
+        return loadScheme(gameConfig.map, gameConfig.mapFile).catch(() => {
           console.warn('No .SCH file found, using fallback scheme');
           currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile, 'FALLBACK', true);
           return createFallbackScheme();
-        })
-        .then(async (loadedScheme) => {
-          const schemeSummary = initializeGameplaySystems(loadedScheme);
-          // Wait for all renderer assets to finish loading
-          await Promise.all([
-            gridRenderer?.loaded,
-            playerRenderer?.loaded,
-            bombRenderer?.loaded,
-            powerupRenderer?.loaded,
-          ]);
-          revealGameplayUi(loadingMsg, schemeSummary);
-          soundManager.playMusic('BOMBHP.WAV');
         });
+      };
+
+      buildSchemePromise().then(async (loadedScheme) => {
+        const schemeSummary = initializeGameplaySystems(loadedScheme);
+        // Wait for all renderer assets to finish loading
+        await Promise.all([
+          gridRenderer?.loaded,
+          playerRenderer?.loaded,
+          bombRenderer?.loaded,
+          powerupRenderer?.loaded,
+        ]);
+        revealGameplayUi(loadingMsg, schemeSummary);
+        soundManager.playMusic('BOMBHP.WAV');
+      });
     },
 
     onExit() {
@@ -1143,6 +1246,7 @@ export function createGameplayScreen(
         gridRenderer.onBricksDestroyed(events.bricksDestroyed);
       }
       for (const brick of events.bricksDestroyed) {
+        recordBrickDestroyed(brick.owner);
         particleSystem.emitBrickDebris(brick.col, brick.row);
         const revealed = powerupManager.revealAt(brick.col, brick.row);
         if (revealed) {
@@ -1169,13 +1273,34 @@ export function createGameplayScreen(
         if (roundTimeRemaining <= 0) {
           roundTimeRemaining = 0;
           suddenDeath.start();
+          // Trigger "SUDDEN DEATH!" announcement overlay
+          suddenDeathAnnounceTimer = 0;
+          // Play explosion sound and slam the screen for the initial trigger
+          soundManager.play('EXPLO.WAV');
+          shakeIntensity = Math.min(shakeIntensity + SUDDEN_DEATH_WAVE_SHAKE, SHAKE_MAX_INTENSITY);
         }
       }
 
       if (suddenDeath.active) {
-        const dropped = suddenDeath.update(dt, gameGrid, players, bombManager, powerupManager);
-        if (dropped && shakeIntensity < SHAKE_MAX_INTENSITY) {
-          shakeIntensity = Math.min(shakeIntensity + 0.2, SHAKE_MAX_INTENSITY);
+        suddenDeath.update(dt, gameGrid, players, bombManager, powerupManager);
+
+        // Register new wall positions with the renderer for flash animation
+        if (suddenDeath.droppedThisFrame.length > 0) {
+          gridRenderer.onSuddenDeathWalls(suddenDeath.droppedThisFrame);
+        }
+
+        // Per-wave: play sound and add screen shake when a new ring starts dropping
+        if (suddenDeath.newWaveThisFrame) {
+          soundManager.play('EXPLO.WAV');
+          shakeIntensity = Math.min(shakeIntensity + SUDDEN_DEATH_WAVE_SHAKE, SHAKE_MAX_INTENSITY);
+        }
+      }
+
+      // Advance the sudden death announcement timer
+      if (suddenDeathAnnounceTimer >= 0) {
+        suddenDeathAnnounceTimer += dt;
+        if (suddenDeathAnnounceTimer >= SUDDEN_DEATH_ANNOUNCE_DURATION) {
+          suddenDeathAnnounceTimer = -1;
         }
       }
 

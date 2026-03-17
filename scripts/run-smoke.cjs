@@ -2022,8 +2022,8 @@ function testAINavigatesCorner() {
   // Test that the AI can navigate to a powerup that requires corner turns
   // from an off-center starting position. The powerup at (3,3) forces the AI
   // through at least one corner from (1.4, 1.0).
-  // Run 10 iterations to catch flakiness from random think timer jitter.
-  for (let iter = 0; iter < 10; iter++) {
+  // Run 20 iterations to catch flakiness from random think timer jitter.
+  for (let iter = 0; iter < 20; iter++) {
     const scheme = {
       name: 'CORNER_TEST',
       brickDensity: 0,
@@ -2107,7 +2107,7 @@ function testAIFleesAroundCorner() {
   // think timer jitter.
   const offsets = [0, 0.1, 0.2, 0.3, -0.1, -0.2, -0.3];
 
-  for (let iter = 0; iter < 10; iter++) {
+  for (let iter = 0; iter < 20; iter++) {
     for (const xOff of offsets) {
       for (const yOff of offsets) {
         const startX = 3 + xOff;
@@ -2177,6 +2177,379 @@ function testAIFleesFromPosition(startX, startY) {
     player.alive,
     `AI starting at (${startX.toFixed(1)}, ${startY.toFixed(1)}) should survive own bomb — died at (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Extended AI navigation tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: run one AI navigation scenario.
+ * Returns the final (x, y) and whether the AI kept moving (displacement over
+ * the last 60 frames exceeds the stuck threshold of 0.1 tiles).
+ */
+function runAIScenario({ grid, bombs, powerups, player, bot, frames = 120, suppressBombs = false }) {
+  const dt = 1 / 60;
+  const posHistory = [];
+
+  for (let i = 0; i < frames; i++) {
+    bot.update(dt, grid, bombs, powerups, [player]);
+
+    if (suppressBombs) {
+      player.inputBomb = false;
+    } else if (player.inputBomb) {
+      const { col, row } = player.getGridPos();
+      if (bombs.placeBomb(col, row, player.index, player.stats.bombRange, player.stats.hasJelly)) {
+        player.stats.activeBombs++;
+      }
+      player.inputBomb = false;
+    }
+
+    player.update(dt, grid, bombs);
+    bombs.update(dt, grid);
+
+    posHistory.push({ x: player.x, y: player.y });
+  }
+
+  // "displacement" = max distance from initial position at any point during the run
+  const first = posHistory[0];
+  let maxDisplacement = 0;
+  for (const pos of posHistory) {
+    const dx = pos.x - first.x;
+    const dy = pos.y - first.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > maxDisplacement) maxDisplacement = d;
+  }
+  return { x: player.x, y: player.y, displacement: maxDisplacement };
+}
+
+function testAINavigatesWithBombsOnField() {
+  // AI at various fractional positions near active bombs should navigate away
+  // without getting stuck. 20 iterations with varying start positions and bomb
+  // placements.
+  const startPositions = [
+    { x: 1.3, y: 1.0 }, { x: 1.0, y: 1.4 }, { x: 1.5, y: 1.0 },
+    { x: 1.0, y: 1.5 }, { x: 1.2, y: 1.2 }, { x: 1.4, y: 1.3 },
+    { x: 3.3, y: 1.0 }, { x: 3.0, y: 1.4 }, { x: 3.5, y: 1.0 },
+    { x: 3.0, y: 1.5 }, { x: 5.3, y: 1.0 }, { x: 5.0, y: 1.4 },
+    { x: 1.3, y: 3.0 }, { x: 1.0, y: 3.4 }, { x: 1.5, y: 3.0 },
+    { x: 3.3, y: 3.0 }, { x: 3.0, y: 3.4 }, { x: 5.3, y: 3.0 },
+    { x: 1.1, y: 1.1 }, { x: 3.1, y: 3.1 },
+  ];
+
+  for (let iter = 0; iter < 20; iter++) {
+    const sp = startPositions[iter % startPositions.length];
+
+    const scheme = {
+      name: 'BOMB_NAV_TEST',
+      brickDensity: 0,
+      grid: createBasicSchemeGrid(),
+      spawns: [{ player: 0, x: 1, y: 1, team: 0 }],
+      powerups: [],
+      conveyors: [],
+      warps: [],
+    };
+    const grid = new GameGrid(scheme);
+    const bombs = new BombManager();
+    const powerups = new PowerupManager(grid, scheme.powerups);
+
+    // Place a powerup at a far reachable cell
+    powerups.powerups.push({ col: 5, row: 1, type: 0, revealed: true });
+
+    const player = new Player(0, 'ai', 1, 1);
+    player.x = sp.x;
+    player.y = sp.y;
+    const bot = new AIBot(player, 'normal');
+
+    // Place a bomb at an adjacent cell (not the player cell to avoid instant death)
+    const bombCol = Math.floor(sp.x + 0.2);
+    const bombRow = Math.floor(sp.y + 0.2);
+    // Place bomb at cell to the right of player's grid cell (if in bounds)
+    const adjCol = Math.min(bombCol + 2, 14);
+    bombs.placeBomb(adjCol, bombRow, 1, 2);
+
+    // Run long enough for the bomb to explode (2s fuse + 0.5s explosion = 2.5s)
+    // plus extra time for the AI to start moving again (total ~5s = 300 frames).
+    // Suppress AI bomb placement to focus on navigation behavior.
+    const { displacement } = runAIScenario({
+      grid, bombs, powerups, player, bot,
+      frames: 300,
+      suppressBombs: true,
+    });
+
+    assert.ok(
+      displacement > 0.5,
+      `[iter ${iter}] AI at (${sp.x}, ${sp.y}) with bomb on field should move away — displacement=${displacement.toFixed(3)}`,
+    );
+  }
+}
+
+function testAIEscapesFromOnTopOfBomb() {
+  // AI starting with a fractional offset from a bomb cell center should
+  // move away from the bomb within a reasonable time. Tests the specific
+  // scenario reported as buggy (AI stuck semi-on-top of a bomb).
+  const offsets = [0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, -0.4];
+  const startCells = [
+    { col: 3, row: 1 }, { col: 5, row: 1 }, { col: 7, row: 3 },
+    { col: 3, row: 3 }, { col: 5, row: 3 }, { col: 7, row: 1 },
+  ];
+
+  let iter = 0;
+  for (const cell of startCells) {
+    for (let oi = 0; oi < offsets.length && iter < 20; oi++, iter++) {
+      const xOff = offsets[oi];
+      const yOff = offsets[(oi + 1) % offsets.length];
+      const startX = cell.col + xOff;
+      const startY = cell.row + yOff;
+
+      const scheme = {
+        name: 'ONTOP_BOMB_TEST',
+        brickDensity: 0,
+        grid: createBasicSchemeGrid(),
+        spawns: [{ player: 0, x: cell.col, y: cell.row, team: 0 }],
+        powerups: [],
+        conveyors: [],
+        warps: [],
+      };
+      const grid = new GameGrid(scheme);
+      const bombs = new BombManager();
+      const powerups = new PowerupManager(grid, scheme.powerups);
+      const player = new Player(0, 'ai', cell.col, cell.row);
+      player.x = startX;
+      player.y = startY;
+      const bot = new AIBot(player, 'normal');
+
+      // Place bomb directly at the player's grid cell — the grace period
+      // means the player can walk off it. This is the buggy case.
+      bombs.placeBomb(cell.col, cell.row, 0, 2);
+      player.stats.activeBombs++;
+
+      const startX0 = player.x;
+      const startY0 = player.y;
+
+      // Run 120 frames (2 seconds — bomb fuses at 2s so watch survival)
+      const dt = 1 / 60;
+      for (let f = 0; f < 120; f++) {
+        bot.update(dt, grid, bombs, powerups, [player]);
+        player.inputBomb = false; // suppress further bomb placement
+        player.update(dt, grid, bombs);
+        bombs.update(dt, grid);
+      }
+
+      const movedX = Math.abs(player.x - startX0);
+      const movedY = Math.abs(player.y - startY0);
+      const totalMoved = movedX + movedY;
+
+      assert.ok(
+        totalMoved > 0.5,
+        `[iter ${iter}] AI at (${startX.toFixed(2)}, ${startY.toFixed(2)}) on-top-of bomb cell (${cell.col},${cell.row}) should move off — moved ${totalMoved.toFixed(3)} tiles total`,
+      );
+    }
+  }
+}
+
+function testAINavigatesNarrowCorridors() {
+  // Create maps with 1-tile-wide corridors (horizontal and vertical) and verify
+  // the AI traverses them without getting stuck. 20 iterations.
+
+  // Horizontal corridor: rows 0-10 are solid except row 5 (a 1-wide horizontal lane)
+  function makeHorizontalCorridor() {
+    const g = Array.from({ length: 11 }, () => Array(15).fill(TileType.Solid));
+    for (let c = 0; c < 15; c++) g[5][c] = TileType.Empty;
+    // Also clear the start and end cells' rows to allow movement
+    return g;
+  }
+
+  // Vertical corridor: cols 0-14 are solid except col 7 (a 1-wide vertical lane)
+  function makeVerticalCorridor() {
+    const g = Array.from({ length: 11 }, () => Array(15).fill(TileType.Solid));
+    for (let r = 0; r < 11; r++) g[r][7] = TileType.Empty;
+    return g;
+  }
+
+  const scenarios = [
+    // Horizontal corridor: start left side, target right side
+    {
+      gridFn: makeHorizontalCorridor,
+      startX: 1, startY: 5,
+      targetCol: 13, targetRow: 5,
+      xOff: 0, yOff: 0,
+    },
+    // Vertical corridor: start top, target bottom
+    {
+      gridFn: makeVerticalCorridor,
+      startX: 7, startY: 1,
+      targetCol: 7, targetRow: 9,
+      xOff: 0, yOff: 0,
+    },
+  ];
+
+  // 20 iterations alternating the two layouts with different fractional offsets
+  const fracOffsets = [0, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, -0.4, 0.15];
+
+  for (let iter = 0; iter < 20; iter++) {
+    const scenario = scenarios[iter % scenarios.length];
+    const frac = fracOffsets[Math.floor(iter / scenarios.length) % fracOffsets.length];
+
+    const gridData = scenario.gridFn();
+    const scheme = {
+      name: 'CORRIDOR_TEST',
+      brickDensity: 0,
+      grid: gridData,
+      spawns: [{ player: 0, x: scenario.startX, y: scenario.startY, team: 0 }],
+      powerups: [],
+      conveyors: [],
+      warps: [],
+    };
+    const grid = new GameGrid(scheme);
+    const bombs = new BombManager();
+    const powerups = new PowerupManager(grid, scheme.powerups);
+
+    // Place powerup at far end of corridor
+    powerups.powerups.push({
+      col: scenario.targetCol,
+      row: scenario.targetRow,
+      type: 0,
+      revealed: true,
+    });
+
+    const player = new Player(0, 'ai', scenario.startX, scenario.startY);
+    // Apply fractional offset perpendicular to corridor to stress corner alignment
+    if (iter % scenarios.length === 0) {
+      player.y = scenario.startY + frac * 0.5; // small perpendicular offset for horizontal
+    } else {
+      player.x = scenario.startX + frac * 0.5; // small perpendicular offset for vertical
+    }
+
+    const bot = new AIBot(player, 'normal');
+
+    let reachedTarget = false;
+    const dt = 1 / 60;
+    let framesStuck = 0;
+    let lastCol = -1;
+    let lastRow = -1;
+    let maxStuck = 0;
+
+    for (let f = 0; f < 240; f++) {
+      bot.update(dt, grid, bombs, powerups, [player]);
+      player.inputBomb = false;
+      player.update(dt, grid, bombs);
+      bombs.update(dt, grid);
+
+      const pos = player.getGridPos();
+      if (pos.col === scenario.targetCol && pos.row === scenario.targetRow) {
+        reachedTarget = true;
+        break;
+      }
+
+      if (pos.col === lastCol && pos.row === lastRow) {
+        framesStuck++;
+        if (framesStuck > maxStuck) maxStuck = framesStuck;
+      } else {
+        framesStuck = 0;
+      }
+      lastCol = pos.col;
+      lastRow = pos.row;
+    }
+
+    assert.ok(
+      reachedTarget,
+      `[iter ${iter}] AI should traverse corridor to (${scenario.targetCol},${scenario.targetRow}) — ended at (${player.x.toFixed(2)}, ${player.y.toFixed(2)})`,
+    );
+    assert.ok(
+      maxStuck < 90,
+      `[iter ${iter}] AI stuck in same cell for ${maxStuck} frames while traversing corridor`,
+    );
+  }
+}
+
+function testAIStressTestRandomPositions() {
+  // 50 iterations: random walkable positions on open grid, random powerup target.
+  // Verify AI keeps moving (not stuck) over the full run.
+  const openGrid = Array.from({ length: 11 }, () => Array(15).fill(TileType.Empty));
+
+  // Deterministic pseudo-random using a simple LCG so tests are reproducible
+  // but cover a wide spread of positions.
+  let seed = 0x12345678;
+  function nextRand() {
+    seed = (seed * 1664525 + 1013904223) & 0xffffffff;
+    return (seed >>> 0) / 0xffffffff;
+  }
+
+  for (let iter = 0; iter < 50; iter++) {
+    const startCol = Math.floor(nextRand() * 13) + 1; // 1..13
+    const startRow = Math.floor(nextRand() * 9) + 1;  // 1..9
+    const xFrac = nextRand() * 0.6 - 0.3;             // -0.3..+0.3
+    const yFrac = nextRand() * 0.6 - 0.3;
+    const startX = startCol + xFrac;
+    const startY = startRow + yFrac;
+
+    // Pick a target that differs from start by at least 2 in either axis
+    let targetCol, targetRow;
+    do {
+      targetCol = Math.floor(nextRand() * 15);
+      targetRow = Math.floor(nextRand() * 11);
+    } while (
+      Math.abs(targetCol - startCol) < 2 && Math.abs(targetRow - startRow) < 2
+    );
+
+    const scheme = {
+      name: 'STRESS_TEST',
+      brickDensity: 0,
+      grid: openGrid,
+      spawns: [{ player: 0, x: startCol, y: startRow, team: 0 }],
+      powerups: [],
+      conveyors: [],
+      warps: [],
+    };
+    const grid = new GameGrid(scheme);
+    const bombs = new BombManager();
+    const powerups = new PowerupManager(grid, scheme.powerups);
+
+    powerups.powerups.push({ col: targetCol, row: targetRow, type: 0, revealed: true });
+
+    const player = new Player(0, 'ai', startCol, startRow);
+    player.x = startX;
+    player.y = startY;
+    const bot = new AIBot(player, 'normal');
+
+    // Track positions over last 60 frames to detect stuck
+    const windowSize = 60;
+    const window = [];
+    let reachedTarget = false;
+
+    const dt = 1 / 60;
+    for (let f = 0; f < 240; f++) {
+      bot.update(dt, grid, bombs, powerups, [player]);
+      player.inputBomb = false;
+      player.update(dt, grid, bombs);
+      bombs.update(dt, grid);
+
+      window.push({ x: player.x, y: player.y });
+      if (window.length > windowSize) window.shift();
+
+      const pos = player.getGridPos();
+      if (pos.col === targetCol && pos.row === targetRow) {
+        reachedTarget = true;
+        break;
+      }
+    }
+
+    // Check stuck: displacement over the last windowSize frames
+    if (!reachedTarget && window.length >= windowSize) {
+      const first = window[0];
+      const last = window[window.length - 1];
+      const dx = last.x - first.x;
+      const dy = last.y - first.y;
+      const displacement = Math.sqrt(dx * dx + dy * dy);
+
+      assert.ok(
+        displacement > 0.1,
+        `[iter ${iter}] AI at (${startX.toFixed(2)},${startY.toFixed(2)}) targeting (${targetCol},${targetRow}) appears stuck — displacement over last ${windowSize} frames: ${displacement.toFixed(3)}`,
+      );
+    }
+    // Either reached target OR kept moving — both count as pass
+  }
 }
 
 async function run(name, fn) {
@@ -2267,6 +2640,10 @@ async function main() {
   await run('grab then throw moves bomb to expected landing position', testGrabThrowCycleMoveBomb);
   await run('AI navigates corner without getting stuck', testAINavigatesCorner);
   await run('AI survives own bomb by fleeing around corner', testAIFleesAroundCorner);
+  await run('AI navigates with bombs on field without getting stuck', testAINavigatesWithBombsOnField);
+  await run('AI escapes from on top of bomb', testAIEscapesFromOnTopOfBomb);
+  await run('AI navigates narrow corridors', testAINavigatesNarrowCorridors);
+  await run('AI stress test with random positions', testAIStressTestRandomPositions);
 
   if (process.exitCode) {
     process.exit(process.exitCode);

@@ -86,6 +86,9 @@ export class PlayerRenderer {
     if (!player.alive && player.deathTimer <= 0) return;
     if (!this.importedSprites) return;
 
+    // During spawn invincibility blink, skip rendering on "off" frames
+    if (player.isFlashing()) return;
+
     const cx = player.x * tileW + tileW / 2;
     const cy = player.y * tileH + tileH / 2;
 

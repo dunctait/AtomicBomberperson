@@ -154,6 +154,9 @@ export class AIBot {
   private stuckCounter = 0;
   /** Snapshot of all players, updated each think cycle. Used for spooger awareness. */
   private cachedPlayers: Player[] = [];
+  /** When true, shouldAbortWaypoint skips blast-zone checks (like flee mode).
+   *  Set by wanderAway when stuck detection fires; cleared when path completes. */
+  private escapeMode = false;
 
   constructor(player: Player, difficulty: AIDifficulty = 'normal') {
     this.player = player;
@@ -214,11 +217,18 @@ export class AIBot {
     this.lastThinkCol = pos.col;
     this.lastThinkRow = pos.row;
 
-    // If stuck for too long, clear path and force wander with a fresh direction
-    if (this.stuckCounter >= 4 && this.currentGoal !== 'flee') {
+    // If stuck for too long, clear path and force wander with a fresh direction.
+    // Only skip for 'flee' if there's an active flee path being followed.
+    // Also skip if the current cell is safe — the AI is intentionally staying put
+    // because there's nowhere better to go. Forcing a wander through blast zones
+    // would send the AI into danger.
+    const activelyFleeing = this.currentGoal === 'flee' && this.path.length > 0 && this.pathIndex < this.path.length;
+    const safeHere = this.isCellSafe(pos.col, pos.row, grid, bombs);
+    if (this.stuckCounter >= 3 && !activelyFleeing && !safeHere) {
       this.path = [];
       this.pathIndex = 0;
       this.stuckCounter = 0;
+      this.escapeMode = true;
       this.wanderAway(pos, grid, bombs);
       return;
     }
@@ -245,6 +255,13 @@ export class AIBot {
     // before the cell is considered "unsafe" by normal standards.
     const inDanger = !this.isCellSafe(pos.col, pos.row, grid, bombs);
     const shouldFlee = inDanger || (this.settings.preemptiveFlee && this.isInBlastZone(pos.col, pos.row, grid, bombs));
+
+    // If actively fleeing with remaining waypoints, keep following the path
+    // even if the current cell happens to be safe (mid-path safe cells exist
+    // when the flee route passes through non-blast-zone tiles).
+    if (this.currentGoal === 'flee' && this.path.length > 0 && this.pathIndex < this.path.length) {
+      return;
+    }
 
     if (shouldFlee) {
       // Easy bots have a delayed flee response
@@ -422,7 +439,7 @@ export class AIBot {
         if (visited.has(key)) continue;
         if (!inBounds(nc, nr)) continue;
         if (!grid.isWalkable(nc, nr)) continue;
-        if (bombs.hasBomb(nc, nr)) continue;
+        if (bombs.isBombBlocking(nc, nr, this.player.index)) continue;
         visited.add(key);
         queue.push({ col: nc, row: nr });
       }
@@ -469,7 +486,7 @@ export class AIBot {
       const current = queue.shift()!;
       if (this.isCellSafe(current.col, current.row, grid, bombs) &&
           grid.isWalkable(current.col, current.row) &&
-          !bombs.hasBomb(current.col, current.row) &&
+          !bombs.isBombBlocking(current.col, current.row, this.player.index) &&
           (current.col !== pos.col || current.row !== pos.row)) {
         return current;
       }
@@ -478,8 +495,9 @@ export class AIBot {
         const nc = current.col + dir.dx;
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
-        // With kick or punch, the AI can pass through bomb cells (it will kick/punch them away)
-        const passable = grid.isWalkable(nc, nr) && (canMoveThroughBombs || !bombs.hasBomb(nc, nr));
+        // With kick or punch, the AI can pass through bomb cells (it will kick/punch them away).
+        // Use isBombBlocking to respect the player's grace period on their own bomb.
+        const passable = grid.isWalkable(nc, nr) && (canMoveThroughBombs || !bombs.isBombBlocking(nc, nr, this.player.index));
         if (!visited.has(key) && inBounds(nc, nr) &&
             passable) {
           visited.add(key);
@@ -563,7 +581,7 @@ export class AIBot {
         const nr = current.row + dir.dy;
         const key = `${nc},${nr}`;
         if (!visited.has(key) && inBounds(nc, nr) &&
-            grid.isWalkable(nc, nr) && !bombs.hasBomb(nc, nr)) {
+            grid.isWalkable(nc, nr) && !bombs.isBombBlocking(nc, nr, this.player.index)) {
           visited.add(key);
           queue.push({ col: nc, row: nr, dist: current.dist + 1 });
         }
@@ -608,14 +626,16 @@ export class AIBot {
     const candidates: GridPos[] = [];
 
     const canMoveThroughBombs = this.player.stats.canKick || this.player.stats.canPunch;
+    // If standing on a bomb cell, accept any walkable neighbor (must escape)
+    const onBomb = bombs.hasBomb(pos.col, pos.row);
     for (const dir of DIRS) {
       const nc = pos.col + dir.dx;
       const nr = pos.row + dir.dy;
       const safe = this.isCellSafe(nc, nr, grid, bombs);
-      const ignoreDanger = !safe && this.settings.dangerIgnoreChance > 0 && Math.random() < this.settings.dangerIgnoreChance;
+      const ignoreDanger = !safe && (onBomb || (this.settings.dangerIgnoreChance > 0 && Math.random() < this.settings.dangerIgnoreChance));
       if (inBounds(nc, nr) &&
           grid.isWalkable(nc, nr) &&
-          (canMoveThroughBombs || !bombs.hasBomb(nc, nr)) &&
+          (canMoveThroughBombs || !bombs.isBombBlocking(nc, nr, this.player.index)) &&
           (safe || ignoreDanger)) {
         candidates.push({ col: nc, row: nr });
       }
@@ -625,7 +645,8 @@ export class AIBot {
       const target = candidates[Math.floor(Math.random() * candidates.length)];
       this.path = [target];
       this.pathIndex = 0;
-      this.currentGoal = 'wander';
+      // Use 'flee' goal when on a bomb so waypoints through blast zones aren't aborted
+      this.currentGoal = onBomb ? 'flee' : 'wander';
     } else {
       this.path = [];
       this.pathIndex = 0;
@@ -658,7 +679,7 @@ export class AIBot {
         const key = `${nc},${nr}`;
         if (visited.has(key)) continue;
         if (!inBounds(nc, nr)) continue;
-        if (!grid.isWalkable(nc, nr) || bombs.hasBomb(nc, nr)) continue;
+        if (!grid.isWalkable(nc, nr) || bombs.isBombBlocking(nc, nr, this.player.index)) continue;
         visited.add(key);
         queue.push({ col: nc, row: nr, dist: cur.dist + 1 });
       }
@@ -717,7 +738,7 @@ export class AIBot {
         if (visited.has(key)) continue;
         if (!inBounds(nc, nr)) continue;
         if (!grid.isWalkable(nc, nr)) continue;
-        if (!allowBombs && bombs.hasBomb(nc, nr)) continue;
+        if (!allowBombs && bombs.isBombBlocking(nc, nr, this.player.index)) continue;
         if (!extraFilter(nc, nr)) continue;
         visited.add(key);
         parent.set(key, currentKey);
@@ -771,12 +792,15 @@ export class AIBot {
     this.path = [];
     this.pathIndex = 0;
     this.thinkTimer = 0;
+    this.escapeMode = false;
   }
 
   /** Is waypoint dangerous and should the AI avoid it (non-flee goals)? */
   private shouldAbortWaypoint(col: number, row: number, grid: GameGrid, bombs: BombManager): boolean {
     if (bombs.isExploding(col, row)) return true;
-    if (this.currentGoal !== 'flee' && !this.isCellSafe(col, row, grid, bombs)) {
+    // In flee or escape mode, only block on active explosions, not blast zones
+    if (this.currentGoal === 'flee' || this.escapeMode) return false;
+    if (!this.isCellSafe(col, row, grid, bombs)) {
       return this.settings.dangerIgnoreChance <= 0 || Math.random() >= this.settings.dangerIgnoreChance;
     }
     return false;

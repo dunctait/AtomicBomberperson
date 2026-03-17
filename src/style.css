@@ -1204,6 +1204,78 @@ body {
   color: #4a4a6e;
 }
 
+/* ===== ROUND STATS TABLE ===== */
+
+.results-stats-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 390px;
+  margin-top: 2px;
+}
+
+.results-stats-heading {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: #7a7a9e;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.results-stats-table {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+}
+
+.results-stats-row {
+  display: grid;
+  grid-template-columns: 16px repeat(4, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #16213e33;
+  border: 1px solid transparent;
+  border-left: 2px solid color-mix(in srgb, var(--player-color, #7a7a9e) 50%, transparent);
+}
+
+.results-stats-row--header {
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  padding-bottom: 0;
+}
+
+.results-stats-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid #000;
+  flex-shrink: 0;
+}
+
+.results-stats-cell {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  text-align: center;
+  color: #c0c0d0;
+}
+
+.results-stats-col-header {
+  color: #7a7a9e;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.results-stats-name {
+  color: #7a7a9e;
+}
+
 /* ===== CANVAS (kept for future game use) ===== */
 
 canvas {

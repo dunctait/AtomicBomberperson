@@ -21,9 +21,13 @@ const ROUND_TIMER_OPTIONS = [0, 30, 60, 90, 120, 180, 300];
 /** Allowed brick density override values. null means "Scheme" (use scheme default). */
 const BRICK_DENSITY_OPTIONS: (number | null)[] = [null, 0, 25, 50, 75, 100];
 
+const RANDOM_MAP_LABEL = 'RANDOM';
+
 interface AvailableMapOption {
   label: string;
   file: string | null;
+  /** When true this entry represents "pick a random scheme each round". */
+  random?: boolean;
 }
 
 export function createGameSetup(
@@ -31,7 +35,7 @@ export function createGameSetup(
 ): GameState {
   let wrapper: HTMLElement | null = null;
   let stageElements: VirtualStageElements | null = null;
-  let availableMaps: AvailableMapOption[] = [{ label: gameConfig.map, file: gameConfig.mapFile }];
+  let availableMaps: AvailableMapOption[] = [{ label: RANDOM_MAP_LABEL, file: null, random: true }, { label: gameConfig.map, file: gameConfig.mapFile }];
   let mapListRequestId = 0;
 
   function getActivePlayerCount(): number {
@@ -105,14 +109,21 @@ export function createGameSetup(
   }
 
   function setSelectedMap(nextMap: AvailableMapOption): void {
-    gameConfig.map = nextMap.label;
-    gameConfig.mapFile = nextMap.file;
+    if (nextMap.random) {
+      gameConfig.map = RANDOM_MAP_LABEL;
+      gameConfig.mapFile = null;
+      gameConfig.randomMap = true;
+    } else {
+      gameConfig.map = nextMap.label;
+      gameConfig.mapFile = nextMap.file;
+      gameConfig.randomMap = false;
+    }
   }
 
   function cycleMap(direction: -1 | 1, container: HTMLElement): void {
     if (availableMaps.length <= 1) return;
-    const currentIndex = availableMaps.findIndex(
-      (map) => map.file === gameConfig.mapFile && map.label === gameConfig.map,
+    const currentIndex = availableMaps.findIndex((map) =>
+      map.random ? gameConfig.randomMap : !gameConfig.randomMap && map.file === gameConfig.mapFile && map.label === gameConfig.map,
     );
     const startIndex = currentIndex === -1 ? 0 : currentIndex;
     const nextIndex =
@@ -140,18 +151,23 @@ export function createGameSetup(
 
       if (!wrapper || requestId !== mapListRequestId) return;
 
-      availableMaps = nextMaps.length > 0 ? nextMaps : [{ label: 'BASIC', file: null }];
-      if (!availableMaps.some((map) => map.file === gameConfig.mapFile && map.label === gameConfig.map)) {
+      const schemeOptions: AvailableMapOption[] = nextMaps.length > 0 ? nextMaps : [{ label: 'BASIC', file: null }];
+      availableMaps = [{ label: RANDOM_MAP_LABEL, file: null, random: true }, ...schemeOptions];
+      if (gameConfig.randomMap) {
+        // Keep RANDOM selected — it's always availableMaps[0]
+      } else if (!availableMaps.some((map) => !map.random && map.file === gameConfig.mapFile && map.label === gameConfig.map)) {
         // Try matching by label alone (handles default 'BASIC' with null mapFile
         // when the imported list has BASIC.SCH with a real file path)
-        const labelMatch = availableMaps.find((map) => map.label === gameConfig.map);
-        setSelectedMap(labelMatch ?? availableMaps[0]);
+        const labelMatch = availableMaps.find((map) => !map.random && map.label === gameConfig.map);
+        setSelectedMap(labelMatch ?? schemeOptions[0]);
       }
       render(container);
     } catch {
       if (!wrapper || requestId !== mapListRequestId) return;
-      availableMaps = [{ label: 'BASIC', file: null }];
-      setSelectedMap(availableMaps[0]);
+      availableMaps = [{ label: RANDOM_MAP_LABEL, file: null, random: true }, { label: 'BASIC', file: null }];
+      if (!gameConfig.randomMap) {
+        setSelectedMap(availableMaps[1]);
+      }
       render(container);
     }
   }
@@ -374,7 +390,7 @@ export function createGameSetup(
 
     onEnter(container: HTMLElement) {
       resetConfig();
-      availableMaps = [{ label: gameConfig.map, file: gameConfig.mapFile }];
+      availableMaps = [{ label: RANDOM_MAP_LABEL, file: null, random: true }, { label: gameConfig.map, file: gameConfig.mapFile }];
       render(container);
       void loadAvailableMaps(container);
     },

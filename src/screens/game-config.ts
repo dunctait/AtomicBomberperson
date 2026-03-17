@@ -14,6 +14,8 @@ export interface GameConfig {
   players: PlayerSlot[];
   map: string;
   mapFile: string | null;
+  /** When true, each round picks a random scheme from the available loaded schemes. */
+  randomMap: boolean;
   winsRequired: number;
   /** Round timer in seconds. When it reaches 0, sudden death begins. 0 means no timer (sudden death disabled). */
   roundTimerSeconds: number;
@@ -28,6 +30,7 @@ export const gameConfig: GameConfig = {
   players: [],
   map: 'BASIC',
   mapFile: null,
+  randomMap: false,
   winsRequired: 3,
   roundTimerSeconds: 120,
   brickDensityOverride: null,
@@ -39,6 +42,7 @@ export function resetConfig(): void {
   gameConfig.playerCount = 4;
   gameConfig.map = 'BASIC';
   gameConfig.mapFile = null;
+  gameConfig.randomMap = false;
   gameConfig.winsRequired = 3;
   gameConfig.roundTimerSeconds = 120;
   gameConfig.brickDensityOverride = null;

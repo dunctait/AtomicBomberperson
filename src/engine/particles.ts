@@ -79,6 +79,23 @@ export class ParticleSystem {
   }
 
   /**
+   * Emit collect particles when a player picks up a powerup.
+   * 6-9 bright white/yellow circles that float upward and fade over ~0.4s.
+   */
+  emitPowerupCollect(col: number, row: number): void {
+    this.emitBurst(col, row, {
+      count: 6 + Math.floor(Math.random() * 4),
+      colors: ['#FFFFFF', '#FFFF88', '#FFE066', '#FFFACD', '#FFD700'],
+      speed: { min: 0.5, max: 1.5 },
+      lifetime: { min: 0.25, max: 0.45, maxLife: 0.45 },
+      size: { min: 2.0, max: 4.0 },
+      positionJitter: 0.25,
+      shape: 'circle',
+      upwardBias: { min: 1.5, max: 3.5 },
+    });
+  }
+
+  /**
    * Emit spark particles for an explosion.
    * 6-10 bright orange/yellow circles that scatter rapidly and fade.
    */
