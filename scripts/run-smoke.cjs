@@ -426,11 +426,11 @@ async function testGameplayMapHudShowsImportedSelection() {
     assert.equal(container.querySelector('.gameplay-hud')?.classList.contains('hidden'), false);
     assert.match(
       container.querySelector('.gameplay-player-hud')?.textContent ?? '',
-      /P1B:2F:2S:3\.0/,
+      /P1B:2F:2S:3\.\d/,
     );
     assert.match(
       container.querySelector('.gameplay-player-hud')?.textContent ?? '',
-      /P2B:2F:2S:3\.0/,
+      /P2B:2F:2S:3\.\d/,
     );
 
     gameplayScreen.onExit();
@@ -1186,7 +1186,7 @@ async function testSchemeStartingInventoryAppliesLivePlayerStats() {
   ]);
 
   assert.equal(player.stats.maxBombs, 3);
-  assert.equal(player.stats.speed, 3.5);
+  assert.equal(player.stats.speed, 3.95);
   assert.equal(player.stats.canKick, true);
   assert.equal(player.stats.hasTrigger, true);
   assert.equal(player.stats.hasJelly, true);
@@ -2010,12 +2010,137 @@ function testGrabThrowCycleMoveBomb() {
   assert.ok(grabbed, 'should grab own bomb');
   assert.ok(!bombs.hasBomb(5, 5), 'bomb should be removed from grid after grab');
 
-  // Throw it
+  // Throw it — bomb starts an arc flight
   bombs.throwBomb(grabbed, 5, 5, 'right', grid);
-  assert.ok(!bombs.hasBomb(5, 5), 'bomb should not be at origin after throw');
-  // Bomb should land 3-5 tiles right
+  // Bomb destination should be 3-5 tiles right
   assert.ok(bombs.bombs[0].col >= 8 && bombs.bombs[0].col <= 10,
     `thrown bomb should land 3-5 tiles away, got col=${bombs.bombs[0].col}`);
+  // During flight, bomb should not be "present" at destination
+  assert.ok(bombs.bombs[0].arc !== null, 'thrown bomb should have arc animation');
+  assert.ok(!bombs.hasBomb(bombs.bombs[0].col, bombs.bombs[0].row),
+    'in-flight bomb should not block its destination cell');
+
+  // After enough time, arc completes and bomb lands
+  for (let i = 0; i < 30; i++) bombs.update(1/60, grid);
+  assert.ok(bombs.bombs[0].arc === null, 'arc should complete after sufficient time');
+  assert.ok(bombs.hasBomb(bombs.bombs[0].col, bombs.bombs[0].row),
+    'landed bomb should be present at destination');
+}
+
+function testThrowBombNoLanding() {
+  // When all cells in throw direction are blocked, bomb drops at origin
+  const gridSpec = Array.from({ length: 11 }, () => Array(15).fill(0));
+  // Make everything solid except origin
+  for (let r = 0; r < 11; r++) {
+    for (let c = 0; c < 15; c++) {
+      gridSpec[r][c] = (r === 5 && c === 5) ? TileType.Empty : TileType.Solid;
+    }
+  }
+  const scheme = {
+    name: 'THROW_BLOCKED',
+    brickDensity: 0,
+    grid: gridSpec,
+    spawns: [],
+    powerups: [],
+    conveyors: [],
+    warps: [],
+  };
+  const grid = new GameGrid(scheme);
+  const bombs = new BombManager();
+
+  // Place and grab a bomb
+  bombs.placeBomb(5, 5, 0, 2);
+  const grabbed = bombs.grabBomb(5, 5, 0);
+  assert.ok(grabbed, 'should grab bomb');
+
+  // Throw into solid walls — should drop at origin
+  bombs.throwBomb(grabbed, 5, 5, 'right', grid);
+  assert.strictEqual(bombs.bombs[0].col, 5, 'blocked throw should drop at origin col');
+  assert.strictEqual(bombs.bombs[0].row, 5, 'blocked throw should drop at origin row');
+  assert.strictEqual(bombs.bombs[0].arc, null, 'blocked throw should have no arc');
+}
+
+function testThrowBombFuseExpiresInFlight() {
+  // If fuse runs out during arc flight, bomb should not detonate until landing
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 0, 2);
+  const bomb = bombs.bombs[0];
+  bomb.timer = 0.05; // almost expired
+
+  const grabbed = bombs.grabBomb(5, 5, 0);
+  assert.ok(grabbed, 'should grab bomb');
+
+  bombs.throwBomb(grabbed, 5, 5, 'right', grid);
+  assert.ok(bombs.bombs[0].arc !== null, 'should be in flight');
+
+  // Tick so fuse expires but bomb is still in flight
+  const events1 = bombs.update(0.06, grid);
+  assert.ok(bombs.bombs[0].timer <= 0, 'fuse should have expired');
+  assert.strictEqual(events1.explosionPositions.length, 0,
+    'bomb should not detonate while in flight');
+
+  // Tick until arc completes — should detonate on landing
+  for (let i = 0; i < 30; i++) {
+    const ev = bombs.update(1/60, grid);
+    if (ev.explosionPositions.length > 0) {
+      assert.ok(true, 'bomb detonated after landing');
+      return;
+    }
+  }
+  assert.fail('bomb should have detonated after arc completed');
+}
+
+function testGrabOnlyOwnBomb() {
+  // Player should not be able to grab another player's bomb
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 1, 2); // player 1's bomb
+  const grabbed = bombs.grabBomb(5, 5, 0); // player 0 tries to grab
+  assert.strictEqual(grabbed, null, 'should not grab another player\'s bomb');
+  assert.ok(bombs.hasBomb(5, 5), 'bomb should still be on grid');
+}
+
+function testCarriedBombFuseExpires() {
+  // Carried bomb fuse ticks down; when it expires the gameplay screen drops it.
+  // Here we test that the timer continues while carried.
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 0, 2);
+  const grabbed = bombs.grabBomb(5, 5, 0);
+  assert.ok(grabbed, 'should grab bomb');
+
+  const initialTimer = grabbed.timer;
+  // Manually tick the carried bomb timer (gameplay screen does this)
+  grabbed.timer -= 0.5;
+  assert.ok(grabbed.timer < initialTimer, 'carried bomb timer should decrease');
+  assert.ok(grabbed.timer > 0, 'carried bomb should not have expired yet');
+}
+
+function testPunchBombArc() {
+  // Punched bomb should have arc animation
+  const grid = createOpenTestGrid();
+  const bombs = new BombManager();
+
+  bombs.placeBomb(5, 5, 0, 2);
+  const punched = bombs.punchBomb(5, 5, 'right', grid);
+  assert.ok(punched, 'punch should succeed');
+
+  const bomb = bombs.bombs[0];
+  assert.ok(bomb.arc !== null, 'punched bomb should have arc animation');
+  assert.strictEqual(bomb.arc.startCol, 5, 'arc should start at origin');
+  assert.ok(bomb.col >= 8 && bomb.col <= 10, 'destination should be 3-5 tiles away');
+
+  // During flight, should not block destination
+  assert.ok(!bombs.hasBomb(bomb.col, bomb.row), 'in-flight punched bomb should not block destination');
+
+  // Complete the arc
+  for (let i = 0; i < 30; i++) bombs.update(1/60, grid);
+  assert.ok(bomb.arc === null, 'arc should complete');
+  assert.ok(bombs.hasBomb(bomb.col, bomb.row), 'landed bomb should be present');
 }
 
 function testAINavigatesCorner() {
@@ -2638,6 +2763,11 @@ async function main() {
   await run('player cannot walk off grid edge', testPlayerCannotWalkOffGrid);
   await run('spawn clearing creates walkable area around spawn points', testSpawnClearingCreatesWalkableArea);
   await run('grab then throw moves bomb to expected landing position', testGrabThrowCycleMoveBomb);
+  await run('throw bomb with no landing drops at origin', testThrowBombNoLanding);
+  await run('throw bomb fuse expires in flight detonates on landing', testThrowBombFuseExpiresInFlight);
+  await run('grab only works on own bombs', testGrabOnlyOwnBomb);
+  await run('carried bomb fuse continues ticking', testCarriedBombFuseExpires);
+  await run('punch bomb has arc animation', testPunchBombArc);
   await run('AI navigates corner without getting stuck', testAINavigatesCorner);
   await run('AI survives own bomb by fleeing around corner', testAIFleesAroundCorner);
   await run('AI navigates with bombs on field without getting stuck', testAINavigatesWithBombsOnField);

@@ -328,30 +328,31 @@ export class Player {
   /** Check if the player hitbox at (px, py) overlaps any non-walkable cell or blocking bomb. */
   private canMoveTo(px: number, py: number, grid: GameGrid, bombs: BombManager): boolean {
     const { minCol, maxCol, minRow, maxRow } = this.hitboxCells(px, py);
-
-    // Cells the player CURRENTLY overlaps — bombs in these cells should not
-    // block movement, otherwise the player gets trapped when an enemy bomb
-    // is placed/kicked into their position. This mirrors classic Bomberman
-    // behavior where bombs only block ENTRY, not escape.
     const cur = this.hitboxCells(this.x, this.y);
 
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
-        // Out-of-bounds cells are treated as impassable — the grid boundary
-        // acts as an invisible wall, preventing players from walking off-grid.
         if (c < 0 || r < 0 || c >= grid.cells[0]?.length || r >= grid.cells.length) {
           return false;
         }
         if (!grid.isWalkable(c, r)) {
           return false;
         }
-        // Only check bomb blocking for cells the player is NEWLY entering.
-        // Cells already overlapped by the current hitbox are "escaped" —
-        // the player shouldn't be trapped by a bomb they're already on.
-        const alreadyOverlapping = c >= cur.minCol && c <= cur.maxCol &&
-                                    r >= cur.minRow && r <= cur.maxRow;
-        if (!alreadyOverlapping && bombs.isBombBlocking(c, r, this.index)) {
-          return false;
+        if (bombs.isBombBlocking(c, r, this.index)) {
+          // If the player already overlaps this bomb cell, allow the move
+          // only if it moves AWAY from the bomb center (escape, not entry).
+          const alreadyOverlapping = c >= cur.minCol && c <= cur.maxCol &&
+                                      r >= cur.minRow && r <= cur.maxRow;
+          if (alreadyOverlapping) {
+            const oldDist = Math.abs(this.x - c) + Math.abs(this.y - r);
+            const newDist = Math.abs(px - c) + Math.abs(py - r);
+            if (newDist <= oldDist) {
+              return false; // moving toward or staying — blocked
+            }
+            // moving away — allowed
+          } else {
+            return false; // entering a new bomb cell — blocked
+          }
         }
       }
     }

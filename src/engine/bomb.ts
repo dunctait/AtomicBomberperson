@@ -2,6 +2,15 @@ import { GameGrid, CellContent, GRID_COLS, GRID_ROWS } from './game-grid';
 
 type BombSlideMode = 'kick' | 'conveyor';
 
+export interface BombArc {
+  startCol: number;
+  startRow: number;
+  endCol: number;
+  endRow: number;
+  duration: number;    // total flight time in seconds
+  elapsed: number;     // time elapsed so far
+}
+
 export interface Bomb {
   col: number;
   row: number;
@@ -22,6 +31,8 @@ export interface Bomb {
   slideX: number;      // fractional col offset from bomb.col
   slideY: number;      // fractional row offset from bomb.row
   lastWarpIndex: number | null;
+  /** Active arc flight (punch/throw) — null when not in flight */
+  arc: BombArc | null;
 }
 
 export interface Explosion {
@@ -41,6 +52,8 @@ export interface BombEvents {
 const BOMB_FUSE = 2.0;
 const EXPLOSION_DURATION = 0.5;
 const CONVEYOR_BOMB_SPEED = 1.4;
+/** Flight time per tile of arc distance (seconds). */
+const ARC_SECONDS_PER_TILE = 0.06;
 
 export function dirToDeltas(dir: 'up' | 'down' | 'left' | 'right'): { ddx: number; ddy: number } {
   return {
@@ -72,7 +85,7 @@ export class BombManager {
   private placementSequence = 0;
 
   private getLiveBombAt(col: number, row: number): Bomb | undefined {
-    return this.bombs.find((bomb) => !bomb.exploded && bomb.col === col && bomb.row === row);
+    return this.bombs.find((bomb) => !bomb.exploded && !this.isInFlight(bomb) && bomb.col === col && bomb.row === row);
   }
 
   private getOldestLiveBomb(owner: number): Bomb | null {
@@ -113,6 +126,7 @@ export class BombManager {
       slideX: 0,
       slideY: 0,
       lastWarpIndex: null,
+      arc: null,
     });
 
     return true;
@@ -142,9 +156,19 @@ export class BombManager {
       explosionPositions: [],
     };
 
+    // Tick arc flight animations
+    for (const bomb of this.bombs) {
+      if (bomb.arc && bomb.arc.elapsed < bomb.arc.duration) {
+        bomb.arc.elapsed += dt;
+        if (bomb.arc.elapsed >= bomb.arc.duration) {
+          bomb.arc = null; // flight complete, bomb has landed
+        }
+      }
+    }
+
     // Move sliding bombs
     for (const bomb of this.bombs) {
-      if (bomb.exploded) {
+      if (bomb.exploded || this.isInFlight(bomb)) {
         continue;
       }
       this.tryTeleportBomb(bomb, grid);
@@ -158,7 +182,8 @@ export class BombManager {
     for (const bomb of this.bombs) {
       if (!bomb.exploded) {
         bomb.timer -= dt;
-        if (bomb.timer <= 0) {
+        // Don't detonate while in flight — wait until landing
+        if (bomb.timer <= 0 && !this.isInFlight(bomb)) {
           this.detonate(bomb, grid, events);
         }
       }
@@ -228,8 +253,7 @@ export class BombManager {
     const landing = this.findArcLanding(col, row, direction, grid);
     if (!landing) return false;
 
-    bomb.col = landing.col;
-    bomb.row = landing.row;
+    this.startArc(bomb, col, row, landing.col, landing.row);
     bomb.graceOwner = null;
     this.stopSliding(bomb);
     return true;
@@ -504,7 +528,7 @@ export class BombManager {
   /** Check if a position has a bomb that blocks a specific player (respects grace) */
   isBombBlocking(col: number, row: number, playerIndex: number): boolean {
     return this.bombs.some(
-      (b) => !b.exploded && b.col === col && b.row === row && b.graceOwner !== playerIndex,
+      (b) => !b.exploded && !this.isInFlight(b) && b.col === col && b.row === row && b.graceOwner !== playerIndex,
     );
   }
 
@@ -541,8 +565,7 @@ export class BombManager {
     const landing = this.findArcLanding(originCol, originRow, direction, grid);
 
     if (landing) {
-      bomb.col = landing.col;
-      bomb.row = landing.row;
+      this.startArc(bomb, originCol, originRow, landing.col, landing.row);
     } else {
       // No landing spot — drop at origin
       bomb.col = originCol;
@@ -552,5 +575,25 @@ export class BombManager {
     bomb.graceOwner = null;
     this.stopSliding(bomb);
     this.bombs.push(bomb);
+  }
+
+  /** Start an arc flight animation on a bomb. */
+  private startArc(bomb: Bomb, fromCol: number, fromRow: number, toCol: number, toRow: number): void {
+    const dist = Math.abs(toCol - fromCol) + Math.abs(toRow - fromRow);
+    bomb.col = toCol;
+    bomb.row = toRow;
+    bomb.arc = {
+      startCol: fromCol,
+      startRow: fromRow,
+      endCol: toCol,
+      endRow: toRow,
+      duration: Math.max(0.15, dist * ARC_SECONDS_PER_TILE),
+      elapsed: 0,
+    };
+  }
+
+  /** Returns true if the bomb is currently in flight (arc animation). */
+  isInFlight(bomb: Bomb): boolean {
+    return bomb.arc !== null && bomb.arc.elapsed < bomb.arc.duration;
   }
 }

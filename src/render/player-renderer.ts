@@ -87,10 +87,9 @@ export class PlayerRenderer {
     if (!this.importedSprites) return;
 
     const cx = player.x * tileW + tileW / 2;
-    // Anchor at the bottom of the tile so the sprite's hotspot (at the feet)
-    // aligns with the tile floor. This gives the classic Bomberman look where
-    // the character body extends upward into the row above.
-    const cy = player.y * tileH + tileH;
+    // Anchor 80% down the tile so the sprite's feet align naturally with
+    // the tile floor while keeping the body visible in row 0.
+    const cy = player.y * tileH + tileH * 0.8;
 
     // Death animation progress: 1.0 = just died, 0.0 = animation complete
     const deathProgress = player.isDeathAnimating()
@@ -169,7 +168,7 @@ export class PlayerRenderer {
     ctx.restore();
 
     if (!player.alive) {
-      this.renderDeadEyes(ctx, cx, cy - tileH * 0.85, tileH * 0.12);
+      this.renderDeadEyes(ctx, cx, cy - tileH * 0.65, tileH * 0.12);
     }
   }
 

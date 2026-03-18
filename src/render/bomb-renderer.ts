@@ -1,4 +1,4 @@
-import type { Bomb, Explosion } from '../engine/bomb';
+import type { Bomb, Explosion, BombArc } from '../engine/bomb';
 import { loadAnimationWithFallback } from './render-utils';
 import { PLAYER_COLORS } from './player-renderer';
 
@@ -186,8 +186,22 @@ export class BombRenderer {
     for (const bomb of bombs) {
       if (bomb.exploded) continue;
 
-      const cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
-      const cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
+      let cx: number;
+      let cy: number;
+      let arcHeight = 0;
+
+      if (bomb.arc && bomb.arc.elapsed < bomb.arc.duration) {
+        // In-flight: interpolate position along arc
+        const t = bomb.arc.elapsed / bomb.arc.duration;
+        cx = (bomb.arc.startCol + (bomb.arc.endCol - bomb.arc.startCol) * t) * tileW + tileW / 2;
+        cy = (bomb.arc.startRow + (bomb.arc.endRow - bomb.arc.startRow) * t) * tileH + tileH / 2;
+        // Parabolic arc height: peaks at t=0.5
+        const dist = Math.abs(bomb.arc.endCol - bomb.arc.startCol) + Math.abs(bomb.arc.endRow - bomb.arc.startRow);
+        arcHeight = 4 * t * (1 - t) * Math.max(tileH, dist * tileH * 0.5);
+      } else {
+        cx = (bomb.col + bomb.slideX) * tileW + tileW / 2;
+        cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
+      }
 
       // Pick the pre-tinted frame set for this player
       const playerFrames = this.tintedBombFrames[
@@ -202,10 +216,21 @@ export class BombRenderer {
       const drawW = frame.width * scale;
       const drawH = frame.height * scale;
       const drawX = cx - drawW / 2;
-      const drawY = cy - drawH / 2;
+      const drawY = cy - drawH / 2 - arcHeight;
 
       ctx.save();
       ctx.imageSmoothingEnabled = false;
+
+      // Draw a shadow on the ground when in flight
+      if (arcHeight > 0) {
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + drawH * 0.3, drawW * 0.4, drawH * 0.15, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       ctx.drawImage(frame, drawX, drawY, drawW, drawH);
       ctx.restore();
     }
