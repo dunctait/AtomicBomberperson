@@ -525,6 +525,7 @@ export function createGameplayScreen(
   onTransition: (state: string) => void,
 ): GameState {
   let canvas: HTMLCanvasElement;
+  let wrapperEl: HTMLElement | null = null;
   let gridRenderer: GridRenderer;
   let playerRenderer: PlayerRenderer;
   let bombManager: BombManager;
@@ -580,6 +581,10 @@ export function createGameplayScreen(
   // HUD element reference
   let hudStatsEl: HTMLDivElement | null = null;
   let gameplayHud: GameplayHudElements | null = null;
+
+  // Spectator speed controls (shown when all human players are dead)
+  let spectatorSpeed = 1;
+  let spectatorBarEl: HTMLDivElement | null = null;
 
   function initPlayers(): void {
     players = [];
@@ -967,6 +972,57 @@ export function createGameplayScreen(
     hudStatsEl.innerHTML = players.map(renderPlayerHudRow).join('');
   }
 
+  function allHumansDead(): boolean {
+    return players.filter((p) => p.type === 'human').every((p) => !p.alive);
+  }
+
+  function showSpectatorBar(container: HTMLElement): void {
+    if (spectatorBarEl) return;
+    spectatorBarEl = document.createElement('div');
+    spectatorBarEl.className = 'spectator-bar';
+    spectatorBarEl.innerHTML =
+      '<button class="spectator-btn" data-speed="1">1x</button>' +
+      '<button class="spectator-btn" data-speed="2">2x</button>' +
+      '<button class="spectator-btn" data-speed="4">4x</button>' +
+      '<button class="spectator-btn spectator-btn--skip" data-speed="0">SKIP</button>';
+    spectatorBarEl.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-speed]') as HTMLElement | null;
+      if (!btn) return;
+      const speed = Number(btn.dataset.speed);
+      if (speed === 0) {
+        // Skip — end round immediately
+        if (!gameOver) {
+          checkWinCondition();
+          if (!gameOver) {
+            // Force game over with current state
+            gameOver = true;
+            gameOverTimer = GAME_OVER_DELAY; // skip delay too
+            const alivePlayers = players.filter((p) => p.alive);
+            if (alivePlayers.length === 1) {
+              gameOverWinnerIndex = alivePlayers[0].index;
+            } else {
+              gameOverWinnerIndex = -1;
+            }
+          }
+        }
+      } else {
+        spectatorSpeed = speed;
+        spectatorBarEl?.querySelectorAll('.spectator-btn').forEach((b) => {
+          b.classList.toggle('spectator-btn--active', (b as HTMLElement).dataset.speed === String(speed));
+        });
+      }
+    });
+    // Highlight 1x by default
+    spectatorBarEl.querySelector('[data-speed="1"]')?.classList.add('spectator-btn--active');
+    container.appendChild(spectatorBarEl);
+  }
+
+  function hideSpectatorBar(): void {
+    spectatorBarEl?.remove();
+    spectatorBarEl = null;
+    spectatorSpeed = 1;
+  }
+
   function createGameplayHud(): GameplayHudElements {
     const root = document.createElement('div');
     root.className = 'gameplay-hud hidden';
@@ -1064,7 +1120,8 @@ export function createGameplayScreen(
 
     onEnter(container: HTMLElement) {
       currentMapMeta = getGameplayMapMeta(gameConfig.map, gameConfig.mapFile);
-      const wrapper = document.createElement('div');
+      wrapperEl = document.createElement('div');
+      const wrapper = wrapperEl;
       wrapper.className = 'screen gameplay-screen';
 
       // Loading message while we fetch the scheme
@@ -1153,6 +1210,7 @@ export function createGameplayScreen(
     onExit() {
       soundManager.stopMusic();
       particleSystem?.clear();
+      hideSpectatorBar();
       initialized = false;
       hudStatsEl = null;
       hudTimerEl = null;
@@ -1184,6 +1242,7 @@ export function createGameplayScreen(
       if (gameOver) {
         gameOverTimer += dt;
         if (gameOverTimer >= GAME_OVER_DELAY) {
+          hideSpectatorBar();
           recordRoundResult(gameOverWinnerIndex);
           onTransition(isMatchOver() ? 'match-victory' : 'round-results');
           return;
@@ -1192,9 +1251,17 @@ export function createGameplayScreen(
         return;
       }
 
+      // Show spectator bar when all human players are dead
+      if (!spectatorBarEl && allHumansDead() && wrapperEl) {
+        showSpectatorBar(wrapperEl);
+      }
+
+      // Apply spectator speed multiplier
+      const gameDt = dt * spectatorSpeed;
+
       // Update AI bots (sets their input flags before movement/bomb handling)
       for (const bot of aiBots) {
-        bot.update(dt, gameGrid, bombManager, powerupManager, players);
+        bot.update(gameDt, gameGrid, bombManager, powerupManager, players);
       }
 
       // Handle bomb placement / remote trigger input
@@ -1203,7 +1270,7 @@ export function createGameplayScreen(
       // Tick fuse on carried bombs — if it expires, explode at player's position
       for (const p of players) {
         if (p.alive && p.carriedBomb) {
-          p.carriedBomb.timer -= dt;
+          p.carriedBomb.timer -= gameDt;
           if (p.carriedBomb.timer <= 0) {
             // Drop the bomb at the player's position and let it detonate normally
             const { col, row } = p.getGridPos();
@@ -1218,13 +1285,13 @@ export function createGameplayScreen(
 
       // Update all players (smooth movement)
       for (const p of players) {
-        p.update(dt, gameGrid, bombManager);
+        p.update(gameDt, gameGrid, bombManager);
       }
 
       // Update bombs and explosions -- capture events
-      const events = bombManager.update(dt, gameGrid);
+      const events = bombManager.update(gameDt, gameGrid);
       mergeBombEvents(events, triggeredEvents);
-      particleSystem.update(dt);
+      particleSystem.update(gameDt);
 
       // Play explosion sound and trigger screen shake when new explosions fire
       if (events.explosionPositions.length > 0) {
@@ -1238,7 +1305,7 @@ export function createGameplayScreen(
       }
 
       // Update brick crumble animations
-      gridRenderer.update(dt);
+      gridRenderer.update(gameDt);
 
       // Animate and reveal powerups under destroyed bricks
       const newlyRevealedPowerups = new Set<string>();
@@ -1269,7 +1336,7 @@ export function createGameplayScreen(
 
       // Update round timer and sudden death (0 means timer is off)
       if (!suddenDeath.active && gameConfig.roundTimerSeconds > 0) {
-        roundTimeRemaining -= dt;
+        roundTimeRemaining -= gameDt;
         if (roundTimeRemaining <= 0) {
           roundTimeRemaining = 0;
           suddenDeath.start();
@@ -1282,7 +1349,7 @@ export function createGameplayScreen(
       }
 
       if (suddenDeath.active) {
-        suddenDeath.update(dt, gameGrid, players, bombManager, powerupManager);
+        suddenDeath.update(gameDt, gameGrid, players, bombManager, powerupManager);
 
         // Register new wall positions with the renderer for flash animation
         if (suddenDeath.droppedThisFrame.length > 0) {
@@ -1298,7 +1365,7 @@ export function createGameplayScreen(
 
       // Advance the sudden death announcement timer
       if (suddenDeathAnnounceTimer >= 0) {
-        suddenDeathAnnounceTimer += dt;
+        suddenDeathAnnounceTimer += gameDt;
         if (suddenDeathAnnounceTimer >= SUDDEN_DEATH_ANNOUNCE_DURATION) {
           suddenDeathAnnounceTimer = -1;
         }
@@ -1334,7 +1401,7 @@ export function createGameplayScreen(
 
       // Update screen shake
       if (shakeIntensity > 0) {
-        shakeIntensity = Math.max(0, shakeIntensity - SHAKE_DECAY_RATE * dt);
+        shakeIntensity = Math.max(0, shakeIntensity - SHAKE_DECAY_RATE * gameDt);
         shakeX = (Math.random() * 2 - 1) * shakeIntensity;
         shakeY = (Math.random() * 2 - 1) * shakeIntensity;
       } else {

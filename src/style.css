@@ -1013,6 +1013,49 @@ body {
   background: #8f3041;
 }
 
+.spectator-bar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 100;
+  animation: toast-in 0.3s ease-out;
+}
+
+.spectator-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  padding: 6px 10px;
+  border: 1px solid #53d8fb44;
+  border-radius: 4px;
+  background: #0f3460cc;
+  color: #8899aa;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.spectator-btn:hover {
+  background: #1a4a80cc;
+  color: #e0e0e0;
+}
+
+.spectator-btn--active {
+  background: #53d8fb33;
+  color: #53d8fb;
+  border-color: #53d8fb88;
+}
+
+.spectator-btn--skip {
+  color: #ff6666;
+  border-color: #ff666644;
+}
+
+.spectator-btn--skip:hover {
+  background: #ff333322;
+  color: #ff8888;
+}
+
 /* ===== ROUND RESULTS SCREEN ===== */
 
 .round-results-screen {

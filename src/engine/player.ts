@@ -221,6 +221,19 @@ export class Player {
     // Clamp position so player stays within the grid
     this.x = Math.max(0, Math.min(GRID_COLS - 1, this.x));
     this.y = Math.max(0, Math.min(GRID_ROWS - 1, this.y));
+
+    // Clear grace period on bombs we've fully walked off. Use the hitbox
+    // cells rather than grid position so grace only clears when the player
+    // has completely left the bomb cell (no hitbox overlap remaining).
+    const hb = this.hitboxCells(this.x, this.y);
+    for (const bomb of bombs.bombs) {
+      if (bomb.graceOwner !== this.index) continue;
+      const onBomb = bomb.col >= hb.minCol && bomb.col <= hb.maxCol &&
+                     bomb.row >= hb.minRow && bomb.row <= hb.maxRow;
+      if (!onBomb) {
+        bomb.graceOwner = null;
+      }
+    }
   }
 
   private applyConveyorMotion(dt: number, grid: GameGrid, bombs: BombManager): void {
