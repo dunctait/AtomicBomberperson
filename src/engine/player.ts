@@ -28,7 +28,7 @@ const HALF = HITBOX / 2;
  * scale (= 0.5 in our 1-tile scale). html5-bombergirl uses ~0.625. We use
  * a generous value for that classic smooth Bomberman feel.
  */
-const SLIDE_THRESHOLD = 0.55;
+const SLIDE_THRESHOLD = 0.65;
 /**
  * Corner-slide nudge speed multiplier. The perpendicular nudge is applied
  * at this factor of the player's movement speed, making corner rounding
@@ -41,8 +41,6 @@ const CONVEYOR_SPEED = 1.4;
 export const DEATH_ANIM_DURATION = 1.0;
 /** Duration of spawn invincibility in seconds. */
 export const SPAWN_INVINCIBILITY_DURATION = 2.0;
-/** Blink rate during invincibility (cycles per second). */
-const INVINCIBILITY_BLINK_RATE = 10;
 
 function getOppositeDirection(dir: Direction): Direction {
   switch (dir) {
@@ -110,7 +108,7 @@ export class Player {
     this.stats = {
       maxBombs: 1,
       bombRange: 2,
-      speed: 3.0,
+      speed: 3.45,
       activeBombs: 0,
       canKick: false,
       canPunch: false,
@@ -311,9 +309,7 @@ export class Player {
   }
 
   isFlashing(): boolean {
-    if (this.invincibleTimer <= 0) return false;
-    const elapsed = SPAWN_INVINCIBILITY_DURATION - this.invincibleTimer;
-    return Math.floor(elapsed * INVINCIBILITY_BLINK_RATE) % 2 === 1;
+    return false;
   }
 
   private getMovementSpeed(): number {
