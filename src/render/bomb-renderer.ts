@@ -23,10 +23,8 @@ const FLAME_LEFT_END = 30;
 
 const EXPLOSION_DURATION = 0.5;
 
-/** Base animation speed for bomb sprites (frames per second) when fuse is full. */
-const BOMB_ANIM_FPS_BASE = 6;
-/** Maximum speed near detonation. Kept subtle to avoid "fast ticking" feel. */
-const BOMB_ANIM_FPS_MAX = 8;
+/** Constant animation speed for bomb sprites (frames per second). */
+const BOMB_ANIM_FPS = 6;
 /** Full fuse duration in seconds; must match BOMB_FUSE in bomb.ts. */
 const BOMB_FUSE_DURATION = 2.0;
 
@@ -151,10 +149,6 @@ export class BombRenderer {
     }
   }
 
-  private getBombAnimationSpeed(bombTimer: number): number {
-    const fuseProgress = 1 - Math.max(0, Math.min(1, bombTimer / BOMB_FUSE_DURATION));
-    return BOMB_ANIM_FPS_BASE + (BOMB_ANIM_FPS_MAX - BOMB_ANIM_FPS_BASE) * fuseProgress;
-  }
 
   private getExplosionBaseFrame(exp: Explosion): number {
     if (exp.direction === 'center') return FLAME_CENTER;
@@ -209,8 +203,7 @@ export class BombRenderer {
       ];
 
       const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bomb.timer);
-      const fps = this.getBombAnimationSpeed(bomb.timer);
-      const frameIndex = Math.floor(fuseElapsed * fps) % playerFrames.length;
+      const frameIndex = Math.floor(fuseElapsed * BOMB_ANIM_FPS) % playerFrames.length;
       const frame = playerFrames[frameIndex];
       const scale = Math.min(tileW, tileH) / Math.max(1, Math.max(frame.width, frame.height));
       const drawW = frame.width * scale;

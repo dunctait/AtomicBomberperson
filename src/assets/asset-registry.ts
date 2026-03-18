@@ -177,8 +177,22 @@ export class AssetRegistry {
       return this.soundCache.get(key)!;
     }
 
-    const rss = parseRSS(buffer);
-    const audioBuf = rssToAudioBuffer(rss, audioCtx);
+    let audioBuf: AudioBuffer;
+
+    // Detect WAV files by RIFF header; fall back to raw RSS PCM format
+    const header = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+    const isWav = header[0] === 0x52 && header[1] === 0x49 &&
+                  header[2] === 0x46 && header[3] === 0x46; // "RIFF"
+
+    if (isWav) {
+      // Standard WAV — use browser's native decoder
+      const copy = buffer.slice(0);
+      audioBuf = await audioCtx.decodeAudioData(copy);
+    } else {
+      // Raw RSS PCM format (Atomic Bomberman custom)
+      const rss = parseRSS(buffer);
+      audioBuf = rssToAudioBuffer(rss, audioCtx);
+    }
 
     this.soundCache.set(key, audioBuf);
     return audioBuf;

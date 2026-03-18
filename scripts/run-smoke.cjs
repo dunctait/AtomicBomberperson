@@ -1186,7 +1186,7 @@ async function testSchemeStartingInventoryAppliesLivePlayerStats() {
   ]);
 
   assert.equal(player.stats.maxBombs, 3);
-  assert.equal(player.stats.speed, 3.95);
+  assert.equal(player.stats.speed, 4.1);
   assert.equal(player.stats.canKick, true);
   assert.equal(player.stats.hasTrigger, true);
   assert.equal(player.stats.hasJelly, true);

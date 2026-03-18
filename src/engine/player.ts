@@ -104,7 +104,7 @@ export class Player {
     this.stats = {
       maxBombs: 1,
       bombRange: 2,
-      speed: 3.45,
+      speed: 3.6,
       activeBombs: 0,
       canKick: false,
       canPunch: false,
@@ -339,20 +339,15 @@ export class Player {
           return false;
         }
         if (bombs.isBombBlocking(c, r, this.index)) {
-          // If the player already overlaps this bomb cell, allow the move
-          // only if it moves AWAY from the bomb center (escape, not entry).
-          const alreadyOverlapping = c >= cur.minCol && c <= cur.maxCol &&
-                                      r >= cur.minRow && r <= cur.maxRow;
-          if (alreadyOverlapping) {
-            const oldDist = Math.abs(this.x - c) + Math.abs(this.y - r);
-            const newDist = Math.abs(px - c) + Math.abs(py - r);
-            if (newDist <= oldDist) {
-              return false; // moving toward or staying — blocked
-            }
-            // moving away — allowed
-          } else {
-            return false; // entering a new bomb cell — blocked
+          // Bombs block ENTRY but not ESCAPE. If the player's current
+          // grid position is the same as this bomb cell, they're already
+          // on it and should be free to walk off in any direction.
+          const playerCol = Math.round(this.x);
+          const playerRow = Math.round(this.y);
+          if (c === playerCol && r === playerRow) {
+            continue; // on this bomb — allowed to escape
           }
+          return false;
         }
       }
     }
