@@ -129,6 +129,11 @@ export function createMainMenu(
 
       content.appendChild(list);
 
+      const version = document.createElement('span');
+      version.className = 'menu-version';
+      version.textContent = 'v0.3.5';
+      content.appendChild(version);
+
       applyBakedStageArt({
         stage,
         assetName: 'MAINMENU.PCX',
