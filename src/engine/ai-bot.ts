@@ -186,12 +186,74 @@ export class AIBot {
     this.bombCooldown = Math.max(0, this.bombCooldown - dt);
     this.thinkTimer -= dt;
 
+    // Check trigger bomb detonation every tick — 5% chance per tick when
+    // an enemy is in the blast path (~0.33s average reaction time at 60fps)
+    this.checkTriggerDetonation(grid, bombs, allPlayers);
+
     if (this.thinkTimer <= 0) {
       this.think(grid, bombs, powerups, allPlayers);
       this.thinkTimer = this.settings.thinkIntervalBase + Math.random() * this.settings.thinkIntervalJitter;
     }
 
     this.navigatePath(grid, bombs);
+  }
+
+  /**
+   * Check if any enemy is in the blast path of our trigger bombs.
+   * 5% chance per tick to detonate — gives a natural reaction delay.
+   */
+  private checkTriggerDetonation(grid: GameGrid, bombs: BombManager, allPlayers: Player[]): void {
+    if (!this.player.stats.hasTrigger) return;
+    if (!bombs.hasTriggerBombs(this.player.index)) return;
+    if (Math.random() > 0.05) return;
+
+    // Find our trigger bombs and check if any enemy is in blast range
+    for (const bomb of bombs.bombs) {
+      if (bomb.exploded || !bomb.trigger || bomb.owner !== this.player.index) continue;
+      if (bombs.isInFlight(bomb)) continue;
+
+      // Check if any enemy player is in this bomb's blast path
+      let enemyInPath = false;
+      traceBlast(bomb.col, bomb.row, bomb.range, grid, (c, r, hitBrick) => {
+        if (hitBrick) return;
+        for (const p of allPlayers) {
+          if (p.index === this.player.index || !p.alive) continue;
+          const pPos = p.getGridPos();
+          if (pPos.col === c && pPos.row === r) {
+            enemyInPath = true;
+            return true; // short-circuit
+          }
+        }
+      });
+      // Also check the bomb's own cell
+      if (!enemyInPath) {
+        for (const p of allPlayers) {
+          if (p.index === this.player.index || !p.alive) continue;
+          const pPos = p.getGridPos();
+          if (pPos.col === bomb.col && pPos.row === bomb.row) {
+            enemyInPath = true;
+          }
+        }
+      }
+
+      if (enemyInPath) {
+        // Make sure WE are not in the blast path too
+        const myPos = this.player.getGridPos();
+        let selfInDanger = myPos.col === bomb.col && myPos.row === bomb.row;
+        if (!selfInDanger) {
+          traceBlast(bomb.col, bomb.row, bomb.range, grid, (c, r) => {
+            if (c === myPos.col && r === myPos.row) {
+              selfInDanger = true;
+              return true;
+            }
+          });
+        }
+        if (!selfInDanger) {
+          this.player.inputBomb = true;
+          return;
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
