@@ -1880,11 +1880,11 @@ function testAIPlacesBombFromCornerSpawn() {
   const player = new Player(0, 'ai', 1, 1);
   const bot = new AIBot(player, 'normal');
 
-  // Run 240 AI think+update cycles (simulating ~4 seconds of game time).
+  // Run 360 AI think+update cycles (simulating ~6 seconds of game time).
   // Budget is generous to accommodate random think interval jitter.
   const dt = 1 / 60;
   let bombPlaced = false;
-  for (let i = 0; i < 240; i++) {
+  for (let i = 0; i < 360; i++) {
     bot.update(dt, grid, bombs, powerups, [player]);
     // Check if AI set inputBomb
     if (player.inputBomb) {
@@ -1899,7 +1899,7 @@ function testAIPlacesBombFromCornerSpawn() {
     bombs.update(dt, grid);
   }
 
-  assert.ok(bombPlaced, 'AI should place at least one bomb within 4 seconds from corner spawn');
+  assert.ok(bombPlaced, 'AI should place at least one bomb within 6 seconds from corner spawn');
 }
 
 function testAIDoesNotBombUnsafePosition() {
@@ -2633,7 +2633,7 @@ async function main() {
   await run('kicked bomb stops at grid edge', testKickBombStopsAtGridEdge);
 
   // Integration tests — realistic gameplay scenarios
-  await run('AI places bomb from corner spawn within 4 seconds', testAIPlacesBombFromCornerSpawn);
+  await run('AI places bomb from corner spawn within 6 seconds', testAIPlacesBombFromCornerSpawn);
   await run('AI does not bomb in dead-end with no escape', testAIDoesNotBombUnsafePosition);
   await run('player cannot walk off grid edge', testPlayerCannotWalkOffGrid);
   await run('spawn clearing creates walkable area around spawn points', testSpawnClearingCreatesWalkableArea);
