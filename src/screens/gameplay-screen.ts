@@ -912,7 +912,6 @@ export function createGameplayScreen(
   function checkPlayerDeaths(): void {
     for (const p of players) {
       if (!p.alive) continue;
-      if (p.isInvincible()) continue;
       const { col, row } = p.getGridPos();
       if (bombManager.isExploding(col, row)) {
         p.die();

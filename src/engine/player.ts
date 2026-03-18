@@ -39,8 +39,6 @@ const SLOW_DISEASE_MULTIPLIER = 0.55;
 const CONVEYOR_SPEED = 1.4;
 /** Duration of the death animation in seconds. */
 export const DEATH_ANIM_DURATION = 1.0;
-/** Duration of spawn invincibility in seconds. */
-export const SPAWN_INVINCIBILITY_DURATION = 2.0;
 
 function getOppositeDirection(dir: Direction): Direction {
   switch (dir) {
@@ -79,8 +77,6 @@ export class Player {
   /** Timer for death animation. Starts at DEATH_ANIM_DURATION when die() is called, counts down to 0. */
   deathTimer = 0;
 
-  /** Spawn invincibility timer. Counts down from SPAWN_INVINCIBILITY_DURATION to 0 after spawn. */
-  invincibleTimer = SPAWN_INVINCIBILITY_DURATION;
 
   // Raw input flags
   inputUp = false;
@@ -165,7 +161,6 @@ export class Player {
   update(dt: number, grid: GameGrid, bombs: BombManager): void {
     this.slowDiseaseTimer = Math.max(0, this.slowDiseaseTimer - dt);
     this.reverseDiseaseTimer = Math.max(0, this.reverseDiseaseTimer - dt);
-    this.invincibleTimer = Math.max(0, this.invincibleTimer - dt);
 
     if (!this.alive) {
       if (this.deathTimer > 0) {
@@ -302,14 +297,6 @@ export class Player {
 
   hasReverseDisease(): boolean {
     return this.reverseDiseaseTimer > 0;
-  }
-
-  isInvincible(): boolean {
-    return this.invincibleTimer > 0;
-  }
-
-  isFlashing(): boolean {
-    return false;
   }
 
   private getMovementSpeed(): number {
