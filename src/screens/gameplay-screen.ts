@@ -859,7 +859,8 @@ export function createGameplayScreen(
         }
       }
 
-      if (p.stats.hasTrigger && p.stats.activeBombs > 0) {
+      if (p.stats.hasTrigger && bombManager.hasTriggerBombs(p.index)) {
+        // Trigger bombs on field — detonate oldest one instead of placing
         mergeBombEvents(triggeredEvents, bombManager.triggerOldestBomb(p.index, gameGrid));
       } else if (p.stats.activeBombs < p.stats.maxBombs) {
         const { col, row } = p.getGridPos();
@@ -879,12 +880,12 @@ export function createGameplayScreen(
             const tc = col + ddx * dist;
             const tr = row + ddy * dist;
             if (!gameGrid.isWalkable(tc, tr)) break;
-            if (!bombManager.placeBomb(tc, tr, p.index, p.stats.bombRange, p.stats.hasJelly)) break;
+            if (!bombManager.placeBomb(tc, tr, p.index, p.stats.bombRange, p.stats.hasJelly, p.stats.hasTrigger)) break;
             p.stats.activeBombs++;
             placed = true;
           }
           if (placed) soundManager.play('BOMBDROP.WAV');
-        } else if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange, p.stats.hasJelly)) {
+        } else if (bombManager.placeBomb(col, row, p.index, p.stats.bombRange, p.stats.hasJelly, p.stats.hasTrigger)) {
           p.stats.activeBombs++;
           soundManager.play('BOMBDROP.WAV');
         }

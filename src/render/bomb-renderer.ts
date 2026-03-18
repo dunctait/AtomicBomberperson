@@ -105,6 +105,8 @@ function tintFrame(
 export class BombRenderer {
   /** Per-player tinted bomb frames: tintedBombFrames[playerIndex][frameIndex] */
   private tintedBombFrames: HTMLCanvasElement[][] | null = null;
+  /** Per-player tinted trigger bomb frames */
+  private tintedTriggerFrames: HTMLCanvasElement[][] | null = null;
   private flameFrames: HTMLCanvasElement[] | null = null;
   /** Per-player tinted flame frames: tintedFlameFrames[playerIndex][frameIndex] */
   private tintedFlameFrames: HTMLCanvasElement[][] | null = null;
@@ -115,13 +117,17 @@ export class BombRenderer {
   }
 
   private async loadSprites(): Promise<void> {
-    const [bombAnim, flameAnim] = await Promise.all([
+    const [bombAnim, triggerAnim, flameAnim] = await Promise.all([
       loadAnimationWithFallback('BOMB.ANI', 'BOMBS.ANI', 1),
+      loadAnimationWithFallback('TRIGANIM.ANI', 'TRIGBOMB.ANI', 1),
       loadAnimationWithFallback('EXPLODE.ANI', 'FLAME.ANI', 35),
     ]);
 
     if (bombAnim) {
-      this.generateTintedFrames(bombAnim.frames);
+      this.tintedBombFrames = this.generateTintedFrames(bombAnim.frames);
+    }
+    if (triggerAnim) {
+      this.tintedTriggerFrames = this.generateTintedFrames(triggerAnim.frames);
     }
     if (flameAnim) {
       this.flameFrames = flameAnim.frames;
@@ -129,14 +135,15 @@ export class BombRenderer {
     }
   }
 
-  /** Pre-generate per-player color-tinted bomb frame sets */
-  private generateTintedFrames(frames: HTMLCanvasElement[]): void {
-    this.tintedBombFrames = [];
+  /** Pre-generate per-player color-tinted frame sets */
+  private generateTintedFrames(frames: HTMLCanvasElement[]): HTMLCanvasElement[][] {
+    const result: HTMLCanvasElement[][] = [];
     for (let p = 0; p < MAX_PLAYERS; p++) {
       const color = PLAYER_COLORS[p] ?? '#53d8fb';
       const [r, g, b] = parseHexColor(color);
-      this.tintedBombFrames.push(frames.map((frame) => tintFrame(frame, r, g, b)));
+      result.push(frames.map((frame) => tintFrame(frame, r, g, b)));
     }
+    return result;
   }
 
   /** Pre-generate per-player color-tinted flame frame sets */
@@ -197,9 +204,11 @@ export class BombRenderer {
         cy = (bomb.row + bomb.slideY) * tileH + tileH / 2;
       }
 
-      // Pick the pre-tinted frame set for this player
-      const playerFrames = this.tintedBombFrames[
-        Math.min(bomb.owner, this.tintedBombFrames.length - 1)
+      // Pick the pre-tinted frame set for this player (trigger vs normal)
+      const frameSet = (bomb.trigger && this.tintedTriggerFrames)
+        ? this.tintedTriggerFrames : this.tintedBombFrames!;
+      const playerFrames = frameSet[
+        Math.min(bomb.owner, frameSet.length - 1)
       ];
 
       const fuseElapsed = Math.max(0, BOMB_FUSE_DURATION - bomb.timer);

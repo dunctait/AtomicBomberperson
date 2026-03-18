@@ -1097,14 +1097,27 @@ async function testTriggerPowerupDetonatesOldestOwnedBomb() {
   applyPowerup(PowerupType.Trigger, player);
   assert.equal(player.stats.hasTrigger, true);
 
-  assert.equal(bombs.placeBomb(2, 2, player.index, 2), true);
-  assert.equal(bombs.placeBomb(2, 5, player.index, 2), true);
+  // Place trigger bombs (6th arg = trigger)
+  assert.equal(bombs.placeBomb(2, 2, player.index, 2, false, true), true);
+  assert.equal(bombs.placeBomb(2, 5, player.index, 2, false, true), true);
 
   const events = bombs.triggerOldestBomb(player.index, grid);
   assert.ok(events, 'expected trigger detonation events');
   assert.deepEqual(events.explosionPositions[0], { col: 2, row: 2 });
   assert.equal(bombs.hasBomb(2, 2), false, 'expected oldest bomb to be removed immediately');
   assert.equal(bombs.hasBomb(2, 5), true, 'expected newer bomb to remain active');
+
+  // Normal bombs should NOT be triggered
+  assert.equal(bombs.placeBomb(3, 3, player.index, 2, false, false), true);
+  const events2 = bombs.triggerOldestBomb(player.index, grid);
+  // Should detonate the remaining trigger bomb at (2,5), not the normal one at (3,3)
+  assert.ok(events2, 'expected second trigger detonation');
+  assert.deepEqual(events2.explosionPositions[0], { col: 2, row: 5 });
+  assert.ok(bombs.hasBomb(3, 3), 'normal bomb should remain untriggered');
+
+  // No more trigger bombs — triggerOldestBomb should return null
+  const events3 = bombs.triggerOldestBomb(player.index, grid);
+  assert.strictEqual(events3, null, 'no trigger bombs left to detonate');
 }
 
 async function testJellyKickedBombsBounceOffBlockingEdges() {

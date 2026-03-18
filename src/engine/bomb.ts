@@ -17,7 +17,8 @@ export interface Bomb {
   owner: number;       // player index
   placedAt: number;
   jelly: boolean;
-  timer: number;       // seconds remaining (starts at 2.0)
+  trigger: boolean;    // true = manual detonation bomb (from trigger powerup)
+  timer: number;       // seconds remaining (starts at 2.0, or TRIGGER_TIMEOUT for trigger bombs)
   range: number;       // explosion range in tiles
   exploded: boolean;
   /** Grace period: the player who placed the bomb can walk out of it */
@@ -50,6 +51,8 @@ export interface BombEvents {
 }
 
 const BOMB_FUSE = 2.0;
+/** Trigger bombs auto-convert to normal after this many seconds. */
+const TRIGGER_TIMEOUT = 15.0;
 const EXPLOSION_DURATION = 0.5;
 const CONVEYOR_BOMB_SPEED = 1.4;
 /** Flight time per tile of arc distance (seconds). */
@@ -104,7 +107,7 @@ export class BombManager {
   }
 
   /** Place a bomb at grid position. Returns false if cell already has a bomb */
-  placeBomb(col: number, row: number, owner: number, range: number, jelly = false): boolean {
+  placeBomb(col: number, row: number, owner: number, range: number, jelly = false, trigger = false): boolean {
     if (this.hasBomb(col, row)) {
       return false;
     }
@@ -115,7 +118,8 @@ export class BombManager {
       owner,
       placedAt: this.placementSequence++,
       jelly,
-      timer: BOMB_FUSE,
+      trigger,
+      timer: trigger ? TRIGGER_TIMEOUT : BOMB_FUSE,
       range,
       exploded: false,
       graceOwner: owner,
@@ -132,21 +136,36 @@ export class BombManager {
     return true;
   }
 
-  /** Detonate the oldest live bomb owned by the given player. */
+  /** Detonate the oldest live trigger bomb owned by the given player. */
   triggerOldestBomb(owner: number, grid: GameGrid): BombEvents | null {
-    const oldestBomb = this.getOldestLiveBomb(owner);
-
-    if (!oldestBomb) {
-      return null;
+    // Find the oldest trigger bomb (not normal bombs)
+    let oldest: Bomb | null = null;
+    for (const bomb of this.bombs) {
+      if (bomb.exploded || bomb.owner !== owner || !bomb.trigger) continue;
+      if (this.isInFlight(bomb)) continue;
+      if (!oldest || bomb.placedAt < oldest.placedAt) {
+        oldest = bomb;
+      }
     }
+
+    if (!oldest) return null;
+
+    // Convert to normal and detonate immediately
+    oldest.trigger = false;
+    oldest.timer = 0;
 
     const events: BombEvents = {
       bricksDestroyed: [],
       explosionPositions: [],
     };
-    this.detonate(oldestBomb, grid, events);
+    this.detonate(oldest, grid, events);
     this.bombs = this.bombs.filter((bomb) => !bomb.exploded);
     return events;
+  }
+
+  /** Returns true if the given player has any live trigger bombs on the field. */
+  hasTriggerBombs(owner: number): boolean {
+    return this.bombs.some((b) => !b.exploded && b.owner === owner && b.trigger);
   }
 
   /** Update all bombs and explosions. Returns events (brick destroyed, player killed positions) */
@@ -182,6 +201,11 @@ export class BombManager {
     for (const bomb of this.bombs) {
       if (!bomb.exploded) {
         bomb.timer -= dt;
+        if (bomb.trigger && bomb.timer <= 0) {
+          // Trigger bomb timed out — convert to normal with standard fuse
+          bomb.trigger = false;
+          bomb.timer = BOMB_FUSE;
+        }
         // Don't detonate while in flight — wait until landing
         if (bomb.timer <= 0 && !this.isInFlight(bomb)) {
           this.detonate(bomb, grid, events);
